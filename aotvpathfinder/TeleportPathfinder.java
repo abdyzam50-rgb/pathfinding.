@@ -1,6 +1,5 @@
 package com.abdy2.aotvpathfinder;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -582,7 +581,9 @@ public final class TeleportPathfinder {
         int maxNodes
     ) {
         Long2ObjectOpenHashMap<GraphNode> graph = new Long2ObjectOpenHashMap<>(maxNodes);
-        ArrayDeque<GraphNode> queue = new ArrayDeque<>();
+        PriorityQueue<GraphNode> queue = new PriorityQueue<>(
+            Comparator.comparingDouble((GraphNode n) -> n.pos.getSquaredDistance(goal))
+        );
         LongOpenHashSet expanded = new LongOpenHashSet(maxNodes);
 
         GraphNode startNode = new GraphNode(start);
@@ -617,21 +618,28 @@ public final class TeleportPathfinder {
 
         long goalPacked = packPos(goal);
         if (!graph.containsKey(goalPacked) && isSafeStanding(player, goal)) {
-            graph.put(goalPacked, new GraphNode(goal));
+            GraphNode goalNode = new GraphNode(goal);
+            graph.put(goalPacked, goalNode);
+            for (BlockPos walkOffset : WALK_OFFSETS) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    BlockPos neighborPos = goal.add(walkOffset).add(0, dy, 0);
+                    GraphNode neighborNode = graph.get(packPos(neighborPos));
+                    if (neighborNode != null && isWalkTransitionValid(player, neighborPos, goal)) {
+                        neighborNode.edges.add(new GraphEdge(goalNode, TeleportHop.HopType.WALK, 0, 1.35));
+                    }
+                }
+            }
         }
 
         return graph;
     }
 
     private boolean shouldExpandNode(BlockPos start, BlockPos goal, BlockPos candidate, boolean includeTeleports) {
-        if (!includeTeleports) {
-            return true;
-        }
-
         double startToGoal = Math.sqrt(start.getSquaredDistance(goal));
         double startToCandidate = Math.sqrt(start.getSquaredDistance(candidate));
         double candidateToGoal = Math.sqrt(candidate.getSquaredDistance(goal));
-        return startToCandidate + candidateToGoal <= startToGoal + 70.0;
+        double slack = includeTeleports ? 70.0 : 50.0;
+        return startToCandidate + candidateToGoal <= startToGoal + slack;
     }
 
     private Collection<Neighbor> neighbors(ClientPlayerEntity player, BlockPos from, boolean includeTeleports, boolean allowAirNormalTeleports, TeleportMode teleportMode, BlockPos goal) {
