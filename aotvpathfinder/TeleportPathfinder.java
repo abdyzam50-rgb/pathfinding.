@@ -1,6 +1,5 @@
 package com.abdy2.aotvpathfinder;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -11,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -247,7 +247,7 @@ public final class TeleportPathfinder {
         LongOpenHashSet seen = new LongOpenHashSet(512);
         BlockPos current = start;
         BlockPos previous = null;
-        Vec3d lockedDirection = null;
+        Vec3d smoothedDir = null;
         seen.add(packPos(current));
 
         double horizontalStartDist = Math.hypot(start.getX() - goal.getX(), start.getZ() - goal.getZ());
@@ -274,7 +274,7 @@ public final class TeleportPathfinder {
                 return new SearchResult(hops, true, 0.0);
             }
 
-            BlockPos next = pickDirectAirChainStep(player, current, goal, teleportMode, seen, previous, lockedDirection, cruiseY);
+            BlockPos next = pickDirectAirChainStep(player, current, goal, teleportMode, seen, previous, smoothedDir, cruiseY);
             if (next == null) {
                 break;
             }
@@ -284,11 +284,12 @@ public final class TeleportPathfinder {
             double hopLen = Math.sqrt(hopVec.x * hopVec.x + hopVec.y * hopVec.y + hopVec.z * hopVec.z);
             if (hopLen > 0.001) {
                 Vec3d hopDir = hopVec.multiply(1.0 / hopLen);
-                if (lockedDirection == null) {
-                    lockedDirection = hopDir;
-                } else if (lockedDirection.dotProduct(hopDir) < 0.965) {
-                    // Turn only when needed, then keep that new heading straight.
-                    lockedDirection = hopDir;
+                if (smoothedDir == null) {
+                    smoothedDir = hopDir;
+                } else {
+                    Vec3d blended = smoothedDir.multiply(0.75).add(hopDir.multiply(0.25));
+                    double blendedLen = Math.sqrt(blended.x * blended.x + blended.y * blended.y + blended.z * blended.z);
+                    smoothedDir = blendedLen > 0.001 ? blended.multiply(1.0 / blendedLen) : smoothedDir;
                 }
             }
 
@@ -401,7 +402,7 @@ public final class TeleportPathfinder {
                 double lockAlign = lockedDirection.dotProduct(stepDir);
                 lockPenalty = Math.max(0.0, 1.0 - lockAlign) * 7.5;
                 // Keep heading fixed unless a turn is truly needed.
-                if (lockAlign < 0.992 && candidateDist > fromDist - 0.55) {
+                if (lockAlign < 0.97 && candidateDist > fromDist - 0.55) {
                     continue;
                 }
             }
@@ -422,6 +423,7 @@ public final class TeleportPathfinder {
             double score = candidateDist - (alignment * 4.35) - Math.max(0.0, offset.getY()) * 0.10 + lateralPenalty + turnPenalty + lockPenalty;
             // Forward preference: reward straighter continuation to reduce oscillation.
             score += Math.abs(offset.getX()) * 0.015 + Math.abs(offset.getZ()) * 0.015;
+            score += (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.35;
 
             if (!descendPhase) {
                 // Keep the chain airborne: prefer climbing to a cruise altitude before descending.
@@ -582,7 +584,9 @@ public final class TeleportPathfinder {
         int maxNodes
     ) {
         Long2ObjectOpenHashMap<GraphNode> graph = new Long2ObjectOpenHashMap<>(maxNodes);
-        ArrayDeque<GraphNode> queue = new ArrayDeque<>();
+        PriorityQueue<GraphNode> queue = new PriorityQueue<>(
+            Comparator.comparingDouble((GraphNode n) -> n.pos.getSquaredDistance(goal))
+        );
         LongOpenHashSet expanded = new LongOpenHashSet(maxNodes);
 
         GraphNode startNode = new GraphNode(start);
@@ -617,21 +621,28 @@ public final class TeleportPathfinder {
 
         long goalPacked = packPos(goal);
         if (!graph.containsKey(goalPacked) && isSafeStanding(player, goal)) {
-            graph.put(goalPacked, new GraphNode(goal));
+            GraphNode goalNode = new GraphNode(goal);
+            graph.put(goalPacked, goalNode);
+            for (BlockPos walkOffset : WALK_OFFSETS) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    BlockPos neighborPos = goal.add(walkOffset).add(0, dy, 0);
+                    GraphNode neighborNode = graph.get(packPos(neighborPos));
+                    if (neighborNode != null && isWalkTransitionValid(player, neighborPos, goal)) {
+                        neighborNode.edges.add(new GraphEdge(goalNode, TeleportHop.HopType.WALK, 0, 1.35));
+                    }
+                }
+            }
         }
 
         return graph;
     }
 
     private boolean shouldExpandNode(BlockPos start, BlockPos goal, BlockPos candidate, boolean includeTeleports) {
-        if (!includeTeleports) {
-            return true;
-        }
-
         double startToGoal = Math.sqrt(start.getSquaredDistance(goal));
         double startToCandidate = Math.sqrt(start.getSquaredDistance(candidate));
         double candidateToGoal = Math.sqrt(candidate.getSquaredDistance(goal));
-        return startToCandidate + candidateToGoal <= startToGoal + 70.0;
+        double slack = includeTeleports ? 70.0 : 50.0;
+        return startToCandidate + candidateToGoal <= startToGoal + slack;
     }
 
     private Collection<Neighbor> neighbors(ClientPlayerEntity player, BlockPos from, boolean includeTeleports, boolean allowAirNormalTeleports, TeleportMode teleportMode, BlockPos goal) {
@@ -705,7 +716,14 @@ public final class TeleportPathfinder {
                     double horizAlignN = hLenN > 0.001 ? (goalDirX * hxN + goalDirZ * hzN) / hLenN : 1.0;
                     double straightPenaltyN = Math.max(0.0, 1.0 - horizAlignN) * 1.8;
                     double turnPenalty = yawDelta / 90.0;
-                    out.add(new Neighbor(landing, TeleportHop.HopType.NORMAL, AotvConfig.TRANSMISSION_MANA, 1.85 + gravityPenalty + turnPenalty + straightPenaltyN));
+                    double dxN = landing.getX() - from.getX();
+                    double dyN = landing.getY() - from.getY();
+                    double dzN = landing.getZ() - from.getZ();
+                    double actualDistN = Math.sqrt(dxN * dxN + dyN * dyN + dzN * dzN);
+                    double longHopBonusN = Math.max(0.0, (actualDistN / AotvConfig.TRANSMISSION_RANGE - 0.75) * 0.6);
+                    double travelCostN = 1.85 + gravityPenalty + turnPenalty + straightPenaltyN - longHopBonusN
+                        + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.15;
+                    out.add(new Neighbor(landing, TeleportHop.HopType.NORMAL, AotvConfig.TRANSMISSION_MANA, travelCostN));
                 }
             }
 
@@ -738,7 +756,14 @@ public final class TeleportPathfinder {
                     double hLenS = Math.sqrt(hxS * hxS + hzS * hzS);
                     double horizAlignS = hLenS > 0.001 ? (goalDirX * hxS + goalDirZ * hzS) / hLenS : 1.0;
                     double straightPenaltyS = Math.max(0.0, 1.0 - horizAlignS) * 1.8;
-                    out.add(new Neighbor(landing, TeleportHop.HopType.SHIFT, AotvConfig.ETHERWARP_MANA, 2.5 + gravityPenalty + (yawDelta / 120.0) + straightPenaltyS));
+                    double dxS = landing.getX() - from.getX();
+                    double dyS = landing.getY() - from.getY();
+                    double dzS = landing.getZ() - from.getZ();
+                    double actualDistS = Math.sqrt(dxS * dxS + dyS * dyS + dzS * dzS);
+                    double longHopBonusS = Math.max(0.0, (actualDistS / AotvConfig.ETHERWARP_RANGE - 0.80) * 0.4);
+                    double travelCostS = 2.5 + gravityPenalty + (yawDelta / 120.0) + straightPenaltyS - longHopBonusS
+                        + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.15;
+                    out.add(new Neighbor(landing, TeleportHop.HopType.SHIFT, AotvConfig.ETHERWARP_MANA, travelCostS));
                 }
             }
         }
@@ -937,9 +962,9 @@ public final class TeleportPathfinder {
                 continue;
             }
 
-            // Teleport hop: try to skip up to 3 redundant same-type hops ahead.
+            // Teleport hop: try to skip up to 6 redundant same-type hops ahead.
             int best = i;
-            for (int j = Math.min(i + 3, input.size() - 1); j > i; j--) {
+            for (int j = Math.min(i + 6, input.size() - 1); j > i; j--) {
                 TeleportHop candidate = input.get(j);
                 if (candidate.type() != hop.type()) {
                     continue;
