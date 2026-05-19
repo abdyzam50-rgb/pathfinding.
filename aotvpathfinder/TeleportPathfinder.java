@@ -1358,8 +1358,8 @@ public final class TeleportPathfinder {
     private static List<BlockPos> buildShortOffsets() {
         List<BlockPos> out = new ArrayList<>();
         int max = AotvConfig.TRANSMISSION_RANGE;
-        for (int dx = -max; dx <= max; dx += 2) {
-            for (int dz = -max; dz <= max; dz += 2) {
+        for (int dx = -max; dx <= max; dx++) {
+            for (int dz = -max; dz <= max; dz++) {
                 for (int dy = -20; dy <= 38; dy++) {
                     double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
                     if (dist < 4 || dist > max) {
@@ -1369,6 +1369,9 @@ public final class TeleportPathfinder {
                 }
             }
         }
+        // Evaluate closer offsets first so expensive corridor checks on far
+        // candidates are skipped when a nearer valid hop is already found.
+        out.sort(Comparator.comparingInt(p -> p.getX() * p.getX() + p.getY() * p.getY() + p.getZ() * p.getZ()));
         return out;
     }
 
