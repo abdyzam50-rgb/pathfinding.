@@ -1051,8 +1051,44 @@ public final class TeleportPathfinder {
         // Check at upper-torso (1.05) and head (1.62) height.
         // The 1.05 offset is slightly above the block surface (Y+1.0) so the lower ray
         // clears small ground-level edges that previously clipped at 0.92.
-        return isRayClear(player, from, to, 1.05)
-            && isRayClear(player, from, to, 1.62);
+        if (!isRayClear(player, from, to, 1.05)) return false;
+        if (!isRayClear(player, from, to, 1.62)) return false;
+
+        // Boundary-trap detection: the player body is 0.6m wide (±0.3 from centre).
+        // A wall exactly one block away is only 0.2m from the body edge, so the
+        // centre ray passes cleanly while the real aim ray clips the wall in-game.
+        // When the landing position is adjacent to any solid block, also check two
+        // rays offset ±0.25 perpendicular to the aim direction at head height.
+        if (hasAdjacentSolid(player, from)) {
+            double dx = to.getX() - from.getX();
+            double dz = to.getZ() - from.getZ();
+            double horizLen = Math.sqrt(dx * dx + dz * dz);
+            if (horizLen > 0.001) {
+                double px = -dz / horizLen * 0.25;
+                double pz =  dx / horizLen * 0.25;
+                Vec3d toCenter = new Vec3d(to.getX() + 0.5, to.getY() + 0.92, to.getZ() + 0.5);
+                Vec3d edgeA = new Vec3d(from.getX() + 0.5 + px, from.getY() + 1.62, from.getZ() + 0.5 + pz);
+                Vec3d edgeB = new Vec3d(from.getX() + 0.5 - px, from.getY() + 1.62, from.getZ() + 0.5 - pz);
+                if (!rayClear(player, edgeA, toCenter)) return false;
+                if (!rayClear(player, edgeB, toCenter)) return false;
+            }
+        }
+        return true;
+    }
+
+    // Returns true when any cardinal neighbour at feet or head height is a solid block,
+    // meaning the player is against a wall and boundary-trap checks are needed.
+    private boolean hasAdjacentSolid(ClientPlayerEntity player, BlockPos pos) {
+        BlockPos head = pos.up();
+        BlockPos[] check = {
+            pos.north(), pos.south(), pos.east(), pos.west(),
+            head.north(), head.south(), head.east(), head.west()
+        };
+        for (BlockPos adj : check) {
+            if (!isChunkLoaded(player, adj)) continue;
+            if (!isPassableForPlayer(player, adj)) return true;
+        }
+        return false;
     }
 
     private List<BlockPos> buildShortWalkChain(ClientPlayerEntity player, BlockPos from, BlockPos to) {
