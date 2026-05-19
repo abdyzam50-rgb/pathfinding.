@@ -39,7 +39,7 @@ public final class TeleportPathfinder {
     private static final int JUST_TELEPORT_MIN_AIR_CLEARANCE = 13;
     private static final double JUST_TELEPORT_FINAL_WALK_RADIUS = 3.0;
     private static final int AIR_CHAIN_SAFE_FALL_DROP = 8;
-    private static final float WAYPOINT_MAX_YAW_DELTA_DEG = 95.0F;
+    private static final float WAYPOINT_MAX_YAW_DELTA_DEG = 145.0F;
 
     private static final List<BlockPos> SHORT_OFFSETS = buildShortOffsets();
     private static final List<BlockPos> LONG_OFFSETS = buildLongOffsets();
@@ -734,7 +734,7 @@ public final class TeleportPathfinder {
                         continue;
                     }
                     float yawDelta = Math.abs(wrapDegrees(yawTo(from, aimPoint) - fromYaw));
-                    if (yawDelta > 120.0F) {
+                    if (yawDelta > 155.0F) {
                         continue;
                     }
 
