@@ -601,7 +601,7 @@ public final class TeleportPathfinder {
             }
             expansions++;
 
-            for (Neighbor neighbor : neighbors(player, current.pos, includeTeleports, allowAirNormalTeleports, teleportMode, goal)) {
+            for (Neighbor neighbor : neighbors(player, current.pos, start, includeTeleports, allowAirNormalTeleports, teleportMode, goal)) {
                 long neighborPacked = packPos(neighbor.pos);
                 GraphNode to = graph.get(neighborPacked);
                 boolean isNew = false;
@@ -645,10 +645,13 @@ public final class TeleportPathfinder {
         return startToCandidate + candidateToGoal <= startToGoal + slack;
     }
 
-    private Collection<Neighbor> neighbors(ClientPlayerEntity player, BlockPos from, boolean includeTeleports, boolean allowAirNormalTeleports, TeleportMode teleportMode, BlockPos goal) {
+    private Collection<Neighbor> neighbors(ClientPlayerEntity player, BlockPos from, BlockPos start, boolean includeTeleports, boolean allowAirNormalTeleports, TeleportMode teleportMode, BlockPos goal) {
         List<Neighbor> out = new ArrayList<>(SHORT_OFFSETS.size() + LONG_OFFSETS.size() + 16);
         double fromGoalSq = from.getSquaredDistance(goal);
-        float fromYaw = player.getYaw();
+        // For the starting node use the player's actual facing; for every subsequent node
+        // the player has already flicked to aim at this position, so their effective facing
+        // is the direction they just traveled (start → from).
+        float fromYaw = from.equals(start) ? player.getYaw() : yawTo(start, from);
 
         // Horizontal goal direction for straight-path bias.
         // Only the XZ plane matters — going vertically to clear terrain is not penalised.
