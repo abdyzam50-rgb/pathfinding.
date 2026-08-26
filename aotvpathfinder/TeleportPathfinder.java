@@ -4,10 +4,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
@@ -142,8 +140,6 @@ public final class TeleportPathfinder {
                 bestFailed = chooseBetter(bestFailed, pureWalk);
             }
         }
-
-
 
         return smoothTeleportRoute(player, start, bestFailed.hops());
     }
@@ -1316,10 +1312,6 @@ public final class TeleportPathfinder {
         return feet.isAir() && head.isAir() && below.isSolidBlock(player.getEntityWorld(), pos.down());
     }
 
-    private double heuristic(BlockPos current, BlockPos goal) {
-        return heuristicWithStart(current, goal, null);
-    }
-
     private double heuristicWithStart(BlockPos current, BlockPos goal, BlockPos start) {
         int dx = Math.abs(current.getX() - goal.getX());
         int dz = Math.abs(current.getZ() - goal.getZ());
@@ -1502,10 +1494,6 @@ public final class TeleportPathfinder {
         }
     }
 }
-
-
-
-
 
 
 
