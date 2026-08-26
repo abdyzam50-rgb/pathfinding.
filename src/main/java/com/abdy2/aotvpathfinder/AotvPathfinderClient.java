@@ -1227,7 +1227,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
      * @return true if a fresh route was installed
      */
     /**
-     * Captures the geometry of a failed node.
+     * Captures a failed node as a crash-report style entry.
      *
      * <p>Called from the rebuild path only, so the log holds faults rather than a trace of ordinary
      * routing. Successes are the uninteresting case: what we need is what set the failing node
@@ -1237,21 +1237,50 @@ public class AotvPathfinderClient implements ClientModInitializer {
         if (faultLog == null) {
             return;
         }
-        TeleportHop step = (currentStepIndex >= 0 && currentStepIndex < activePath.size())
-            ? activePath.get(currentStepIndex)
-            : null;
+        try {
+            TeleportHop step = (currentStepIndex >= 0 && currentStepIndex < activePath.size())
+                ? activePath.get(currentStepIndex)
+                : null;
 
-        String checks = "";
-        if (step != null) {
-            // Record the same verdicts the router acted on, so a fault can be read without having
-            // to re-derive why each guard fired.
-            checks = "inRange=" + withinHopRange(player, step)
-                + " castLine=" + hasCastLineFor(player, step, aimTargetForHop(player, step))
-                + " reached=" + isStepReached(player, step)
-                + " mana=" + manaTracker.currentMana() + "/" + step.manaCost();
+            Boolean inRange = null;
+            Boolean castLine = null;
+            Boolean reached = null;
+            double range = 0.0;
+            String ability = "n/a";
+            if (step != null) {
+                // Record the same verdicts the router acted on, so a report can be read without
+                // having to re-derive why each guard fired.
+                inRange = withinHopRange(player, step);
+                castLine = hasCastLineFor(player, step, aimTargetForHop(player, step));
+                reached = isStepReached(player, step);
+                if (step.isWalk()) {
+                    ability = "walk";
+                } else {
+                    range = maxHopRange(step.type());
+                    ability = step.type() == TeleportHop.HopType.SHIFT ? "etherwarp" : "transmission";
+                }
+            }
+
+            faultLog.record(new AotvFaultLog.Fault(
+                reason,
+                rebuildAttempts + 1,
+                MAX_CONSECUTIVE_REBUILDS,
+                currentStepIndex,
+                activePath.size(),
+                step,
+                goal,
+                manaTracker.currentMana(),
+                range,
+                ability,
+                inRange,
+                castLine,
+                reached,
+                settings.movementMode().name().toLowerCase(Locale.ROOT),
+                teleportModeLabel(settings.teleportMode())
+            ), player);
+        } catch (Exception ignored) {
+            // Never let diagnostics break routing.
         }
-        faultLog.record(reason, rebuildAttempts + 1, currentStepIndex, activePath.size(),
-            step, player, goal, checks);
     }
 
     private boolean attemptRebuild(Minecraft client, String reason) {
