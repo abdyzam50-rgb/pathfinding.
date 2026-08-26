@@ -57,6 +57,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
     private final HypixelManaTracker manaTracker = new HypixelManaTracker();
     private final TeleportPathfinder pathfinder = new TeleportPathfinder();
+    private AotvFaultLog faultLog;
     private AotvClientSettings settings;
 
     private KeyMapping setTargetKey;
@@ -163,6 +164,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         liveAiToggleKey = registerKey("toggle_live_ai", GLFW.GLFW_KEY_O);
 
         settings = AotvClientSettings.load(Minecraft.getInstance().gameDirectory.toPath());
+        faultLog = AotvFaultLog.create(Minecraft.getInstance().gameDirectory.toPath());
 
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> manaTracker.acceptActionBar(message.getString()));
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
@@ -214,6 +216,10 @@ public class AotvPathfinderClient implements ClientModInitializer {
                         .then(literal("off").executes(ctx -> setAirChainCommand(false)))
                     )
                     .then(literal("clear").executes(this::executeClearAll))
+                    .then(literal("faults")
+                        .executes(this::executeShowFaults)
+                        .then(literal("clear").executes(this::executeClearFaults))
+                    )
                     .then(literal("show").executes(ctx -> showSettingsCommand()))
             );
         });
@@ -274,6 +280,35 @@ public class AotvPathfinderClient implements ClientModInitializer {
         boolean keepGoal = true;
         resetRunState(client, !keepGoal);
         sendChat(client.player, "Preview cleared.");
+        return 1;
+    }
+
+    /** Prints the most recent faults, newest last, plus where the full log lives. */
+    private int executeShowFaults(CommandContext<?> context) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null || faultLog == null) {
+            return 0;
+        }
+        List<String> lines = faultLog.recent(8);
+        if (lines.isEmpty()) {
+            sendChat(client.player, "No faults recorded this session.");
+            return 1;
+        }
+        sendChat(client.player, "Last " + lines.size() + " of " + faultLog.faultCount() + " faults:");
+        for (String line : lines) {
+            client.player.sendSystemMessage(Component.literal(line));
+        }
+        sendChat(client.player, "Full log: " + faultLog.file());
+        return 1;
+    }
+
+    private int executeClearFaults(CommandContext<?> context) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null || faultLog == null) {
+            return 0;
+        }
+        faultLog.clear();
+        sendChat(client.player, "Fault log cleared.");
         return 1;
     }
 
@@ -1191,6 +1226,34 @@ public class AotvPathfinderClient implements ClientModInitializer {
      *
      * @return true if a fresh route was installed
      */
+    /**
+     * Captures the geometry of a failed node.
+     *
+     * <p>Called from the rebuild path only, so the log holds faults rather than a trace of ordinary
+     * routing. Successes are the uninteresting case: what we need is what set the failing node
+     * apart from its neighbours.
+     */
+    private void recordFault(LocalPlayer player, String reason) {
+        if (faultLog == null) {
+            return;
+        }
+        TeleportHop step = (currentStepIndex >= 0 && currentStepIndex < activePath.size())
+            ? activePath.get(currentStepIndex)
+            : null;
+
+        String checks = "";
+        if (step != null) {
+            // Record the same verdicts the router acted on, so a fault can be read without having
+            // to re-derive why each guard fired.
+            checks = "inRange=" + withinHopRange(player, step)
+                + " castLine=" + hasCastLineFor(player, step, aimTargetForHop(player, step))
+                + " reached=" + isStepReached(player, step)
+                + " mana=" + manaTracker.currentMana() + "/" + step.manaCost();
+        }
+        faultLog.record(reason, rebuildAttempts + 1, currentStepIndex, activePath.size(),
+            step, player, goal, checks);
+    }
+
     private boolean attemptRebuild(Minecraft client, String reason) {
         LocalPlayer player = client.player;
         if (player == null || goal == null) {
@@ -1202,6 +1265,8 @@ public class AotvPathfinderClient implements ClientModInitializer {
             return false;
         }
         lastRebuildAtMs = now;
+
+        recordFault(player, reason);
 
         if (rebuildAttempts >= MAX_CONSECUTIVE_REBUILDS) {
             sendChat(player, "Giving up after " + rebuildAttempts + " rebuilds (" + reason + "). Route stopped.");
