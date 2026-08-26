@@ -245,7 +245,14 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
     private int buildPreviewPath(Minecraft client, BlockPos target) {
         LocalPlayer player = client.player;
-        List<TeleportHop> path = pathfinder.findPath(player, player.blockPosition(), target, manaTracker.currentMana(), settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
+        List<TeleportHop> path;
+        try {
+            path = pathfinder.findPath(player, player.blockPosition(), target, manaTracker.currentMana(), settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
+        } catch (Exception e) {
+            sendChat(player, "Pathfinder error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            e.printStackTrace();
+            return 0;
+        }
         if (path.isEmpty()) {
             sendChat(player, "Preview: no path found to " + target.getX() + " " + target.getY() + " " + target.getZ() + ".");
             return 0;
