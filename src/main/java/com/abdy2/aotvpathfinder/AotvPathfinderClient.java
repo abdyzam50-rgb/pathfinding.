@@ -115,6 +115,11 @@ public class AotvPathfinderClient implements ClientModInitializer {
     private static final double HOP_ARRIVE_BELOW = 1.2;
     /** How far vertically a walk node may sit and still be considered patch-reachable on foot. */
     private static final double WALK_PATCH_MAX_VERTICAL = 2.5;
+    /**
+     * Fraction of nominal hop range we are willing to patch to. Kept under 1.0 so we never commit
+     * to a node sitting exactly on the edge, where the server's own range check may disagree.
+     */
+    private static final double HOP_RANGE_SAFETY = 0.92;
 
     // --- failure detection / recovery ---
     /** No measurable progress toward the current node for this long counts as stuck. */
@@ -594,6 +599,15 @@ public class AotvPathfinderClient implements ClientModInitializer {
         }
 
         Vec3 stepTarget = aimTargetForHop(player, step);
+
+        // Out of reach for the ability that performs this hop. Aiming and clicking would never
+        // land, so react now rather than waiting for the stuck timer to notice.
+        double stepMaxRange = maxHopRange(step.type()) * HOP_RANGE_SAFETY;
+        if (player.getEyePosition().distanceToSqr(stepTarget) > stepMaxRange * stepMaxRange) {
+            attemptRebuild(client, "node out of range");
+            return;
+        }
+
         if (!hasServerStyleCastClear(player, stepTarget)) {
             if (tryWalkAroundBlocked(player, now, false)) {
                 return;
@@ -1780,7 +1794,24 @@ public class AotvPathfinderClient implements ClientModInitializer {
             }
             return Math.abs(feet.y - hop.landing().getY()) <= WALK_PATCH_MAX_VERTICAL;
         }
-        return hasServerStyleCastClear(player, aimTargetForHop(player, hop));
+
+        // A clear sightline alone is NOT enough to call a hop reachable. The forward patch scans up
+        // to 60 nodes ahead and takes the first teleport node that passes this test, so without a
+        // range check any distant node in open view wins: every walk node in between is discarded
+        // and the router then parks on a node it can never cast to (transmission reaches 12 blocks,
+        // etherwarp 61). Bound by the range of the ability that would actually perform the hop.
+        Vec3 target = aimTargetForHop(player, hop);
+        double maxRange = maxHopRange(hop.type()) * HOP_RANGE_SAFETY;
+        if (player.getEyePosition().distanceToSqr(target) > maxRange * maxRange) {
+            return false;
+        }
+        return hasServerStyleCastClear(player, target);
+    }
+
+    private static double maxHopRange(TeleportHop.HopType type) {
+        return type == TeleportHop.HopType.SHIFT
+            ? AotvConfig.ETHERWARP_RANGE
+            : AotvConfig.TRANSMISSION_RANGE;
     }
 
     private void registerPatchAttempt(long now) {
