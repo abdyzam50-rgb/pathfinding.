@@ -103,6 +103,19 @@ public class AotvPathfinderClient implements ClientModInitializer {
     private int prebuiltFurthestStepIndex;
     private int liveFurthestStepIndex;
 
+    // Arrival tolerances, measured from the player's feet to the landing block's centre.
+    // Horizontal is kept inside (or barely outside) the 1x1 block footprint so that a node only
+    // retires once the player is genuinely standing on it, and vertical is bounded separately so a
+    // node above or below the player never counts as reached.
+    private static final double WALK_ARRIVE_HORIZONTAL_SQ = 0.55 * 0.55;
+    private static final double WALK_ARRIVE_ABOVE = 1.2;
+    private static final double WALK_ARRIVE_BELOW = 0.6;
+    private static final double HOP_ARRIVE_HORIZONTAL_SQ = 1.0 * 1.0;
+    private static final double HOP_ARRIVE_ABOVE = 2.0;
+    private static final double HOP_ARRIVE_BELOW = 1.2;
+    /** How far vertically a walk node may sit and still be considered patch-reachable on foot. */
+    private static final double WALK_PATCH_MAX_VERTICAL = 2.5;
+
     private static final AABB NORMAL_NODE_SHAPE = new AABB(0.12, 0.0, 0.12, 0.88, 0.95, 0.88);
     private static final AABB SHIFT_NODE_SHAPE  = new AABB(0.08, 0.0, 0.08, 0.92, 0.72, 0.92);
     private static final AABB WALK_NODE_SHAPE   = new AABB(0.28, 0.0, 0.28, 0.72, 0.28, 0.72);
@@ -447,11 +460,32 @@ public class AotvPathfinderClient implements ClientModInitializer {
         sendChat(player, "Aimed at step " + (currentStepIndex + 1) + "/" + activePath.size() + " [" + step.type() + "]");
     }
 
+    /**
+     * True once the player has actually arrived at {@code step}.
+     *
+     * <p>This must be measured from the player's real (sub-block) position. Using
+     * {@code blockPosition()} with a spherical {@link net.minecraft.core.Vec3i} radius snaps the
+     * player to integer block coordinates and counts vertical distance the same as horizontal, so a
+     * merely adjacent — or lower — block registers as "arrived". Because this check runs at the top
+     * of every tick before any movement, that let a stationary player retire one node per tick.
+     */
     private boolean isStepReached(LocalPlayer player, TeleportHop step) {
+        Vec3 feet = player.position();
+        BlockPos landing = step.landing();
+
+        double dx = feet.x - (landing.getX() + 0.5);
+        double dz = feet.z - (landing.getZ() + 0.5);
+        double horizontalSq = dx * dx + dz * dz;
+        double dy = feet.y - landing.getY();
+
         if (step.isWalk()) {
-            return player.blockPosition().closerThan(step.landing(), 1.2);
+            return horizontalSq <= WALK_ARRIVE_HORIZONTAL_SQ
+                && dy > -WALK_ARRIVE_BELOW
+                && dy < WALK_ARRIVE_ABOVE;
         }
-        return player.blockPosition().closerThan(step.landing(), 2.25);
+        return horizontalSq <= HOP_ARRIVE_HORIZONTAL_SQ
+            && dy > -HOP_ARRIVE_BELOW
+            && dy < HOP_ARRIVE_ABOVE;
     }
 
     private void runPrebuiltRoute(Minecraft client) {
@@ -1499,7 +1533,16 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
     private boolean isStepPatchReachable(LocalPlayer player, TeleportHop hop) {
         if (hop.isWalk()) {
-            return player.blockPosition().closerThan(hop.landing(), Math.max(3.5, settings.walkPatchWindowBlocks()));
+            // Horizontal reach only: a walk node several blocks above or below is not something we
+            // can simply stroll to, and treating it as patchable makes the route leapfrog nodes.
+            Vec3 feet = player.position();
+            double dx = feet.x - (hop.landing().getX() + 0.5);
+            double dz = feet.z - (hop.landing().getZ() + 0.5);
+            double reach = Math.max(3.5, settings.walkPatchWindowBlocks());
+            if (dx * dx + dz * dz > reach * reach) {
+                return false;
+            }
+            return Math.abs(feet.y - hop.landing().getY()) <= WALK_PATCH_MAX_VERTICAL;
         }
         return hasServerStyleCastClear(player, aimTargetForHop(player, hop));
     }
