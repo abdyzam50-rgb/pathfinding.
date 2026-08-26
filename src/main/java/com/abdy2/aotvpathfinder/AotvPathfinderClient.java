@@ -15,7 +15,6 @@ import org.lwjgl.glfw.GLFW;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.blaze3d.platform.InputConstants;
-import com.mojang.blaze3d.vertex.VertexConsumer;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -26,7 +25,6 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
-import net.minecraft.client.renderer.state.level.LevelRenderState;
 
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.SlabBlock;
@@ -37,9 +35,10 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.DeltaTracker;
-import net.minecraft.client.renderer.ShapeRenderer;
-import net.minecraft.client.renderer.rendertype.RenderType;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.gizmos.Gizmos;
+import net.minecraft.gizmos.GizmoStyle;
+import net.minecraft.util.ARGB;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.resources.Identifier;
@@ -47,8 +46,6 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.Shapes;
-import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.core.Direction;
@@ -106,15 +103,15 @@ public class AotvPathfinderClient implements ClientModInitializer {
     private int prebuiltFurthestStepIndex;
     private int liveFurthestStepIndex;
 
-    private static final VoxelShape NORMAL_NODE_SHAPE = Shapes.box(0.12, 0.0, 0.12, 0.88, 0.95, 0.88);
-    private static final VoxelShape SHIFT_NODE_SHAPE  = Shapes.box(0.08, 0.0, 0.08, 0.92, 0.72, 0.92);
-    private static final VoxelShape WALK_NODE_SHAPE   = Shapes.box(0.28, 0.0, 0.28, 0.72, 0.28, 0.72);
-    private static final VoxelShape NORMAL_GLOW_SHAPE = Shapes.box(0.04, -0.08, 0.04, 0.96, 1.03, 0.96);
-    private static final VoxelShape SHIFT_GLOW_SHAPE  = Shapes.box(0.0,  -0.08, 0.0,  1.0,  0.80, 1.0);
-    private static final VoxelShape WALK_GLOW_SHAPE   = Shapes.box(0.20, -0.05, 0.20, 0.80, 0.35, 0.80);
-    private static final VoxelShape CURRENT_BEACON    = Shapes.box(0.05, 0.0, 0.05, 0.95, 1.4, 0.95);
-    private static final VoxelShape CURRENT_CORE      = Shapes.box(0.20, 0.08, 0.20, 0.80, 1.20, 0.80);
-    private static final VoxelShape GOAL_SHAPE        = Shapes.box(0.0, 0.0, 0.0, 1.0, 1.5, 1.0);
+    private static final AABB NORMAL_NODE_SHAPE = new AABB(0.12, 0.0, 0.12, 0.88, 0.95, 0.88);
+    private static final AABB SHIFT_NODE_SHAPE  = new AABB(0.08, 0.0, 0.08, 0.92, 0.72, 0.92);
+    private static final AABB WALK_NODE_SHAPE   = new AABB(0.28, 0.0, 0.28, 0.72, 0.28, 0.72);
+    private static final AABB NORMAL_GLOW_SHAPE = new AABB(0.04, -0.08, 0.04, 0.96, 1.03, 0.96);
+    private static final AABB SHIFT_GLOW_SHAPE  = new AABB(0.0,  -0.08, 0.0,  1.0,  0.80, 1.0);
+    private static final AABB WALK_GLOW_SHAPE   = new AABB(0.20, -0.05, 0.20, 0.80, 0.35, 0.80);
+    private static final AABB CURRENT_BEACON    = new AABB(0.05, 0.0, 0.05, 0.95, 1.4, 0.95);
+    private static final AABB CURRENT_CORE      = new AABB(0.20, 0.08, 0.20, 0.80, 1.20, 0.80);
+    private static final AABB GOAL_SHAPE        = new AABB(0.0, 0.0, 0.0, 1.0, 1.5, 1.0);
 
     @Override
     public void onInitializeClient() {
@@ -1009,108 +1006,88 @@ public class AotvPathfinderClient implements ClientModInitializer {
             }
         }
 
-        Vec3 cam = context.levelState().cameraRenderState.pos;
-        if (cam == null || context.poseStack() == null || context.bufferSource() == null) return;
-
-        VertexConsumer lines = context.bufferSource().getBuffer(RenderTypes.lines());
-        context.poseStack().pushPose();
-        context.poseStack().translate(-cam.x, -cam.y, -cam.z);
-
         if (start >= route.size()) start = 0;
         double pulse = (Math.sin(System.currentTimeMillis() * 0.004) + 1.0) * 0.5;
         int end = Math.min(route.size(), start + 70);
         Vec3 previousCenter = null;
 
-        for (int i = start; i < end; i++) {
-            TeleportHop hop = route.get(i);
-            BlockPos p = hop.landing();
-            int color = colorForHop(hop.type());
-            boolean isCurrent = (i == start);
-            double renderY = hop.isWalk() ? 0.0 : 1.0;
+        // Gizmos take world coordinates and handle the camera transform themselves.
+        try (var ignored = context.levelRenderer().collectPerFrameRenderThreadGizmos()) {
+            for (int i = start; i < end; i++) {
+                TeleportHop hop = route.get(i);
+                BlockPos p = hop.landing();
+                int color = colorForHop(hop.type());
+                boolean isCurrent = (i == start);
+                double renderY = hop.isWalk() ? 0.0 : 1.0;
 
-            if (isCurrent) {
-                double pad = 0.08 + pulse * 0.05;
-                VoxelShape halo = Shapes.box(
-                    -pad, -0.06, -pad,
-                    1.0 + pad, 1.5 + pulse * 0.25, 1.0 + pad);
-                ShapeRenderer.renderShape(context.poseStack(), lines, halo,
-                    p.getX(), p.getY() + renderY, p.getZ(), dimColor(0xFFFFFF, 0.55), 1.4F);
-                ShapeRenderer.renderShape(context.poseStack(), lines, CURRENT_BEACON,
-                    p.getX(), p.getY() + renderY, p.getZ(), color, 4.2F);
-                ShapeRenderer.renderShape(context.poseStack(), lines, CURRENT_CORE,
-                    p.getX(), p.getY() + renderY, p.getZ(), 0xFFFFFF, 2.6F);
-            } else {
-                ShapeRenderer.renderShape(context.poseStack(), lines, glowShapeForHop(hop.type()),
-                    p.getX(), p.getY() + renderY, p.getZ(), dimColor(color, 0.45), 1.3F);
-                ShapeRenderer.renderShape(context.poseStack(), lines, shapeForHop(hop.type()),
-                    p.getX(), p.getY() + renderY, p.getZ(), color, 2.8F);
-            }
-
-            Vec3 center = Vec3.atCenterOf(p).add(0.0, renderY + 0.45, 0.0);
-            if (previousCenter != null) {
-                float w = isCurrent ? 3.2F : 2.0F;
-                drawLine(context, lines, previousCenter, center, color, 230, w);
-                drawLine(context, lines,
-                    previousCenter.add(0.0, 0.025, 0.0),
-                    center.add(0.0, 0.025, 0.0),
-                    color, 180, Math.max(1.0F, w - 0.8F));
-                drawLine(context, lines,
-                    previousCenter.add(0.0, -0.025, 0.0),
-                    center.add(0.0, -0.025, 0.0),
-                    dimColor(color, 0.55), 140, Math.max(1.0F, w - 1.0F));
-
-                Vec3 seg = center.subtract(previousCenter);
-                double segLen = Math.sqrt(seg.x * seg.x + seg.y * seg.y + seg.z * seg.z);
-                if (segLen > 0.5) {
-                    Vec3 d = seg.scale(1.0 / segLen);
-                    Vec3 mid = previousCenter.add(seg.scale(0.55));
-                    Vec3 perp = new Vec3(-d.z, 0.0, d.x);
-                    double a = 0.32;
-                    drawLine(context, lines, mid, mid.add(perp.scale(a)).subtract(d.scale(a)), 0xFFFFFF, 200, 1.6F);
-                    drawLine(context, lines, mid, mid.subtract(perp.scale(a)).subtract(d.scale(a)), 0xFFFFFF, 200, 1.6F);
+                if (isCurrent) {
+                    double pad = 0.08 + pulse * 0.05;
+                    AABB halo = new AABB(
+                        -pad, -0.06, -pad,
+                        1.0 + pad, 1.5 + pulse * 0.25, 1.0 + pad);
+                    box(halo, p, renderY, dimColor(0xFFFFFF, 0.55), 255, 1.4F);
+                    box(CURRENT_BEACON, p, renderY, color, 255, 4.2F);
+                    box(CURRENT_CORE, p, renderY, 0xFFFFFF, 255, 2.6F);
+                } else {
+                    box(glowShapeForHop(hop.type()), p, renderY, dimColor(color, 0.45), 255, 1.3F);
+                    box(shapeForHop(hop.type()), p, renderY, color, 255, 2.8F);
                 }
+
+                Vec3 center = Vec3.atCenterOf(p).add(0.0, renderY + 0.45, 0.0);
+                if (previousCenter != null) {
+                    float w = isCurrent ? 3.2F : 2.0F;
+                    line(previousCenter, center, color, 230, w);
+                    line(previousCenter.add(0.0, 0.025, 0.0),
+                         center.add(0.0, 0.025, 0.0),
+                         color, 180, Math.max(1.0F, w - 0.8F));
+                    line(previousCenter.add(0.0, -0.025, 0.0),
+                         center.add(0.0, -0.025, 0.0),
+                         dimColor(color, 0.55), 140, Math.max(1.0F, w - 1.0F));
+
+                    // Direction-of-travel marker at the midpoint.
+                    Vec3 seg = center.subtract(previousCenter);
+                    double segLen = seg.length();
+                    if (segLen > 0.5) {
+                        Vec3 d = seg.scale(1.0 / segLen);
+                        Vec3 mid = previousCenter.add(seg.scale(0.45));
+                        Gizmos.arrow(mid, mid.add(d.scale(0.45)), ARGB.color(200, 0xFFFFFF), 1.6F)
+                              .setAlwaysOnTop();
+                    }
+                }
+                previousCenter = center;
             }
-            previousCenter = center;
-        }
 
-        if (start < route.size()) {
-            Vec3 playerPos = new Vec3(client.player.getX(), client.player.getY() + 0.5, client.player.getZ());
-            TeleportHop firstHop = route.get(start);
-            double firstY = firstHop.isWalk() ? 0.0 : 1.0;
-            Vec3 firstCenter = Vec3.atCenterOf(firstHop.landing()).add(0.0, firstY + 0.45, 0.0);
-            drawLine(context, lines, playerPos, firstCenter, 0xFF4444, 255, 3.8F);
-            drawLine(context, lines,
-                playerPos.add(0.0, 0.025, 0.0),
-                firstCenter.add(0.0, 0.025, 0.0),
-                0xFF8888, 180, 2.0F);
-        }
+            if (start < route.size()) {
+                Vec3 playerPos = new Vec3(client.player.getX(), client.player.getY() + 0.5, client.player.getZ());
+                TeleportHop firstHop = route.get(start);
+                double firstY = firstHop.isWalk() ? 0.0 : 1.0;
+                Vec3 firstCenter = Vec3.atCenterOf(firstHop.landing()).add(0.0, firstY + 0.45, 0.0);
+                line(playerPos, firstCenter, 0xFF4444, 255, 3.8F);
+                line(playerPos.add(0.0, 0.025, 0.0),
+                     firstCenter.add(0.0, 0.025, 0.0),
+                     0xFF8888, 180, 2.0F);
+            }
 
-        if (goal != null) {
-            double gp = (Math.sin(System.currentTimeMillis() * 0.003 + 1.0) + 1.0) * 0.5;
-            double gPad = 0.1 + gp * 0.08;
-            VoxelShape goalHalo = Shapes.box(
-                -gPad, -0.1, -gPad, 1.0 + gPad, 1.6 + gp * 0.3, 1.0 + gPad);
-            ShapeRenderer.renderShape(context.poseStack(), lines, goalHalo,
-                goal.getX(), goal.getY(), goal.getZ(), dimColor(0x00FF44, 0.5), 1.5F);
-            ShapeRenderer.renderShape(context.poseStack(), lines, GOAL_SHAPE,
-                goal.getX(), goal.getY(), goal.getZ(), 0x00FF44, 4.5F);
-            ShapeRenderer.renderShape(context.poseStack(), lines, GOAL_SHAPE,
-                goal.getX(), goal.getY() + 1, goal.getZ(), 0x00FF44, 2.5F);
+            if (goal != null) {
+                double gp = (Math.sin(System.currentTimeMillis() * 0.003 + 1.0) + 1.0) * 0.5;
+                double gPad = 0.1 + gp * 0.08;
+                AABB goalHalo = new AABB(
+                    -gPad, -0.1, -gPad, 1.0 + gPad, 1.6 + gp * 0.3, 1.0 + gPad);
+                box(goalHalo, goal, 0.0, dimColor(0x00FF44, 0.5), 255, 1.5F);
+                box(GOAL_SHAPE, goal, 0.0, 0x00FF44, 255, 4.5F);
+                box(GOAL_SHAPE, goal, 1.0, 0x00FF44, 255, 2.5F);
+            }
         }
-
-        context.poseStack().popPose();
     }
 
-    private void drawLine(LevelRenderContext context, VertexConsumer lines,
-                          Vec3 from, Vec3 to, int color, int alpha, float width) {
-        int r = (color >> 16) & 0xFF;
-        int g = (color >> 8) & 0xFF;
-        int b = color & 0xFF;
-        var entry = context.poseStack().last();
-        lines.addVertex(entry, (float) from.x, (float) from.y, (float) from.z)
-             .setColor(r, g, b, alpha).setNormal(entry, 0.0F, 1.0F, 0.0F);
-        lines.addVertex(entry, (float) to.x, (float) to.y, (float) to.z)
-             .setColor(r, g, b, alpha).setNormal(entry, 0.0F, 1.0F, 0.0F);
+    /** Draws a wireframe box whose coordinates are relative to {@code p} (offset up by {@code yOffset}). */
+    private static void box(AABB local, BlockPos p, double yOffset, int rgb, int alpha, float width) {
+        AABB world = local.move(p.getX(), p.getY() + yOffset, p.getZ());
+        Gizmos.cuboid(world, GizmoStyle.stroke(ARGB.color(alpha, rgb), width)).setAlwaysOnTop();
+    }
+
+    private static void line(Vec3 from, Vec3 to, int rgb, int alpha, float width) {
+        Gizmos.line(from, to, ARGB.color(alpha, rgb), width).setAlwaysOnTop();
     }
 
     private static int dimColor(int color, double factor) {
@@ -1120,7 +1097,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return (r << 16) | (g << 8) | b;
     }
 
-    private VoxelShape glowShapeForHop(TeleportHop.HopType type) {
+    private AABB glowShapeForHop(TeleportHop.HopType type) {
         if (type == TeleportHop.HopType.SHIFT) return SHIFT_GLOW_SHAPE;
         if (type == TeleportHop.HopType.WALK) return WALK_GLOW_SHAPE;
         return NORMAL_GLOW_SHAPE;
@@ -1136,7 +1113,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return 0xFFD700;
     }
 
-    private VoxelShape shapeForHop(TeleportHop.HopType type) {
+    private AABB shapeForHop(TeleportHop.HopType type) {
         if (type == TeleportHop.HopType.SHIFT) {
             return SHIFT_NODE_SHAPE;
         }
