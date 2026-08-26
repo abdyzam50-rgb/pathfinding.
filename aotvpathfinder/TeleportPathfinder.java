@@ -1261,8 +1261,8 @@ public final class TeleportPathfinder {
         );
 
         List<TeleportHop> hops = new ArrayList<>(walk.path().size());
-        for (BlockPos pos : walk.path()) {
-            hops.add(new TeleportHop(pos, TeleportHop.HopType.WALK, 0));
+        for (WalkPathNode node : walk.path()) {
+            hops.add(new TeleportHop(node.pos, TeleportHop.HopType.WALK, 0));
         }
 
         return new SearchResult(hops, walk.reachedGoal(), walk.bestDistanceSq());
