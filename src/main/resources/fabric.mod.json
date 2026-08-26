@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "aotvpathfinder",
+  "version": "${version}",
+  "name": "AOTV Pathfinder",
+  "description": "Arrow of the Void teleport pathfinder for Hypixel Skyblock — A* with Theta*, sprint-jump, and smart walk segments.",
+  "authors": ["abdyzam50"],
+  "contact": {
+    "sources": "https://github.com/abdyzam50-rgb/pathfinding."
+  },
+  "license": "MIT",
+  "accessWidener": "aotvpathfinder.accesswidener",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.abdy2.aotvpathfinder.AotvPathfinderClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
