@@ -10,7 +10,6 @@ public class PathNode {
         JUMP,
         SPRINT_JUMP, // Sprint + jump over a 2-4 block gap at the same Y level
         BOOST_PLACE, // Sprint-jump and place a block at interactPos (landing floor) mid-arc
-        MINE,        // Mine block at interactPos before advancing to pos
         DROP,
         WATER_DROP,  // Fall from any height; bot places water bucket just before impact
         BOUNCE,      // Land on slime block; bounce arc carries player to next node
@@ -25,7 +24,7 @@ public class PathNode {
     public final Vec3d precisePos;
     public final PathNode parent;
     public final Type type;
-    /** INTERACT=door; BOOST_PLACE=block to place; MINE=block to break */
+    /** INTERACT=door; BOOST_PLACE=block to place mid-arc */
     public final BlockPos interactPos;
     public double gCost;
 

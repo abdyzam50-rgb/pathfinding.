@@ -22,7 +22,6 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.netherite.tutorialmod.client.TessellatorRenderer;
-import net.netherite.tutorialmod.mining.MiningExecutor;
 import net.netherite.tutorialmod.pathfinder.PathfinderEngine;
 import net.netherite.tutorialmod.pathfinder.PathingEnvironment;
 import net.minecraft.block.FallingBlock;
@@ -474,10 +473,6 @@ public class PathFollower {
         } else if (targetNode.type == PathNode.Type.SPRINT_JUMP
                 || targetNode.type == PathNode.Type.BOOST_PLACE) {
             reached = hDist < 0.8 && Math.abs(dy) < 1.2;
-        } else if (targetNode.type == PathNode.Type.MINE) {
-            reached = targetNode.interactPos != null
-                    && mc.world != null
-                    && mc.world.getBlockState(targetNode.interactPos).isAir();
         } else if (targetNode.type == PathNode.Type.PILLAR) {
             // Block placed AND player has physically risen to target Y
             reached = targetNode.interactPos != null
@@ -616,29 +611,6 @@ public class PathFollower {
                     mc.options.useKey.setPressed(false);
                 }
             }
-            return;
-        }
-
-        // --- MINE: break obstructing block(s) before walking through ---------------
-        // Mine the feet block first; once clear, mine the head block if also solid.
-        // MiningExecutor handles tool selection automatically.
-        if (targetNode.type == PathNode.Type.MINE && targetNode.interactPos != null) {
-            BlockPos minePos = targetNode.interactPos;
-            if (mc.world != null && !mc.world.getBlockState(minePos).isAir()) {
-                MiningExecutor.start(minePos);
-                MiningExecutor.tick(mc);
-                MiningExecutor.attackBlock(mc, minePos);
-                return;
-            }
-            BlockPos headPos = minePos.up();
-            if (mc.world != null && !mc.world.getBlockState(headPos).isAir()) {
-                MiningExecutor.start(headPos);
-                MiningExecutor.tick(mc);
-                MiningExecutor.attackBlock(mc, headPos);
-                return;
-            }
-            MiningExecutor.stop();
-            faceAndWalk(player, mc, dx, dz, false);
             return;
         }
 
@@ -1128,17 +1100,7 @@ public class PathFollower {
 
     /**
      * Detects when the bot has fallen into a narrow hole (≥3 of 4 horizontal sides
-     * blocked at both foot and head level) and applies an escape manoeuvre:
-     *
-     * <ul>
-     *   <li>If the space above the head is open (1-block-deep hole): jump and walk
-     *       toward any open direction to climb out naturally.
-     *   <li>If no horizontal exit exists but above is open: repeatedly jump;
-     *       the pathfinder replan that fires immediately after will find a JUMP node
-     *       out of the hole.
-     *   <li>If the bot is completely sealed in: mine the closest non-bedrock wall
-     *       block with {@link MiningExecutor} to create an exit (should be rare).
-     * </ul>
+     * blocked at both foot and head level) and jumps out if above is open.
      *
      * @return {@code true} if an escape action was taken this tick.
      */
@@ -1147,10 +1109,8 @@ public class PathFollower {
 
         BlockPos feet = player.getBlockPos();
 
-        // Count solid walls at both foot and head level
         int solidFoot = 0, solidHead = 0;
-        Direction openDir   = null;   // any horizontal direction with 2-block clearance
-        Direction mineDir   = null;   // best candidate to mine if truly sealed
+        Direction openDir = null;
 
         for (Direction d : new Direction[]{
                 Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST }) {
@@ -1158,32 +1118,17 @@ public class PathFollower {
             var shState = mc.world.getBlockState(feet.up().offset(d));
             if (!sfState.isAir()) solidFoot++;
             if (!shState.isAir()) solidHead++;
-
-            // An "open" direction has air at both foot and head level → player can walk there
             if (sfState.isAir() && shState.isAir() && openDir == null) openDir = d;
-
-            // A mineable direction: solid at foot but not bedrock/barrier
-            if (mineDir == null && !sfState.isAir()
-                    && sfState.getBlock() != Blocks.BEDROCK
-                    && sfState.getBlock() != Blocks.BARRIER) {
-                mineDir = d;
-            }
         }
 
-        // Only intervene if ≥ 3 sides are walled — otherwise normal stuck recovery handles it
         if (solidFoot < 3 && solidHead < 3) return false;
 
-        // ── Escape path A: jump out (works for 1-block-deep surface holes) ──────
-        // Above the head must be clear so the player can rise into open air.
         boolean aboveOpen = mc.world.getBlockState(feet.up(2)).isAir();
         if (aboveOpen) {
             mc.options.jumpKey.setPressed(true);
             if (openDir != null) {
-                // Walk toward the one open side — this gets us onto the rim
                 faceAndWalk(player, mc, openDir.getOffsetX(), openDir.getOffsetZ(), false);
             } else {
-                // Fully enclosed at our level but sky above — just jump; the replan will
-                // generate a JUMP-over-wall node once we're airborne.
                 setKey(mc.options.forwardKey, true);
                 setKey(mc.options.backKey,    false);
                 setKey(mc.options.leftKey,    false);
@@ -1193,15 +1138,7 @@ public class PathFollower {
             return true;
         }
 
-        // ── Escape path B: mine a wall block to create an exit ───────────────────
-        if (mineDir != null) {
-            BlockPos mineTarget = feet.offset(mineDir);
-            if (!MiningExecutor.isActive()) MiningExecutor.start(mineTarget);
-            MiningExecutor.tick(mc);
-            return true;
-        }
-
-        return false; // nothing we can do — let the caller decide
+        return false;
     }
 
     // -----------------------------------------------------------------------

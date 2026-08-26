@@ -312,7 +312,6 @@ public class PathfinderEngine {
             case JUMP        -> hdist + 0.4;
             case SPRINT_JUMP -> hdist + 0.2;
             case BOOST_PLACE -> hdist + 0.5;
-            case MINE        -> hdist + 2.0; // expensive — only dig when no free route exists
             case DROP        -> hdist + Math.abs(dy) * 0.1;
             case WATER_DROP  -> hdist + Math.abs(dy) * 0.1;
             // BOUNCE: cheap because the physics bounce covers the next segment for free
@@ -398,10 +397,6 @@ public class PathfinderEngine {
         if (canWalkTo(world, from, target, pathStart, pathEnd)) {
             Vec3d precise = new Vec3d(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
             out.add(new PathNode(target, precise, current, PathNode.Type.WALK));
-        } else if (!diagonal && canMineTo(world, from, target, pathStart, pathEnd)) {
-            // MINE: solid block in the way but breakable — bot will carve through it
-            Vec3d precise = new Vec3d(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
-            out.add(new PathNode(target, precise, current, PathNode.Type.MINE, target));
         } else if (!diagonal && hasBuildingBlocks && canBridgeTo(world, target, pathStart, pathEnd)) {
             // BRIDGE: target has no floor — place a block at the gap to cross it
             Vec3d precise = new Vec3d(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
@@ -1544,42 +1539,10 @@ public class PathfinderEngine {
         if (from.type == PathNode.Type.BOUNCE      || to.type == PathNode.Type.BOUNCE)      return false;
         if (from.type == PathNode.Type.CLIMB       || to.type == PathNode.Type.CLIMB)       return false;
         if (from.type == PathNode.Type.INTERACT    || to.type == PathNode.Type.INTERACT)    return false;
-        if (from.type == PathNode.Type.MINE        || to.type == PathNode.Type.MINE)        return false;
         if (from.type == PathNode.Type.PILLAR      || to.type == PathNode.Type.PILLAR)      return false;
         if (from.type == PathNode.Type.BRIDGE      || to.type == PathNode.Type.BRIDGE)      return false;
         if (to.pos.getY() != from.pos.getY()) return false;
         return isPathClear(world, from.pos, to.pos, pathStart, pathEnd);
     }
 
-    // -----------------------------------------------------------------------
-    // Mining helpers
-    // -----------------------------------------------------------------------
-
-    /**
-     * True if the block cannot be broken (bedrock, barrier, end portal frame, etc.).
-     * Uses hardness < 0 as the universal marker for unbreakable blocks.
-     */
-    private static boolean isUnminable(World world, BlockPos pos) {
-        var state = world.getBlockState(pos);
-        if (state.isAir()) return false;
-        return state.getHardness(world, pos) < 0;
-    }
-
-    /**
-     * Returns true when the player can reach {@code target} by mining the solid block there.
-     * Conditions: there is solid ground to stand on, the block is breakable, and the player
-     * has approach clearance.  The head-block ({@code target.up()}) may also be solid as long
-     * as it is breakable — PathFollower will mine both before walking through.
-     */
-    private static boolean canMineTo(World world, BlockPos from, BlockPos target,
-                                      BlockPos pathStart, BlockPos pathEnd) {
-        if (passable(world, target, pathStart, pathEnd)) return false; // already clear, walk instead
-        if (isUnminable(world, target)) return false;                  // can't break it
-        if (!hasSolidGround(world, target)) return false;              // no floor to stand on after
-        // Head block must be passable or also minable
-        if (!passable(world, target.up(), pathStart, pathEnd) && isUnminable(world, target.up())) return false;
-        // Approach: player must be able to stand at 'from' and have headroom
-        if (!passable(world, from.up(), pathStart, pathEnd)) return false;
-        return true;
-    }
 }

@@ -489,7 +489,6 @@ public class TessellatorRenderer {
             case JUMP        -> new float[]{1.0f, 0.5f, 0.0f};  // Orange
             case SPRINT_JUMP -> new float[]{0.0f, 1.0f, 0.5f};  // Lime / spring green
             case BOOST_PLACE -> new float[]{0.2f, 1.0f, 1.0f};  // Cyan — place-while-jumping
-            case MINE        -> new float[]{1.0f, 0.3f, 0.3f};  // Red — mining step
             case DROP        -> new float[]{1.0f, 1.0f, 0.0f};  // Yellow
             case WATER_DROP  -> new float[]{0.0f, 0.7f, 1.0f};  // Cyan — water bucket clutch
             case BOUNCE      -> new float[]{0.5f, 1.0f, 0.0f};  // Yellow-green — slime bounce
