@@ -104,7 +104,6 @@ public class AotvPathfinderClient implements ClientModInitializer {
     private final ArrayDeque<Long> patchAttemptTimes = new ArrayDeque<>();
     private int prebuiltFurthestStepIndex;
     private int liveFurthestStepIndex;
-    private List<BlockPos> highlightedBlocks = new ArrayList<>();
 
     private static final VoxelShape NORMAL_NODE_SHAPE = Shapes.box(0.12, 0.0, 0.12, 0.88, 0.95, 0.88);
     private static final VoxelShape SHIFT_NODE_SHAPE  = Shapes.box(0.08, 0.0, 0.08, 0.92, 0.72, 0.92);
@@ -989,40 +988,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
     }
 
     private void updateRouteHighlights(Minecraft client) {
-        List<BlockPos> routeBlocks = new ArrayList<>();
-        List<TeleportHop> route = liveAi ? livePlannedPath : activePath;
-
-        int start = liveAi ? Math.min(liveStepIndex, route.size()) : Math.min(currentStepIndex, route.size());
-        int end = Math.min(route.size(), start + 24);
-        for (int i = start; i < end; i++) {
-            routeBlocks.add(route.get(i).landing());
-        }
-
-        clearHighlights(client);
-
-        Set<BlockPos> espBlocks = new LinkedHashSet<>();
-        for (BlockPos landing : routeBlocks) {
-            BlockPos base = landing.below();
-            espBlocks.add(base);
-            espBlocks.add(base.above());
-            espBlocks.add(base.north());
-            espBlocks.add(base.south());
-            espBlocks.add(base.east());
-            espBlocks.add(base.west());
-        }
-
-        int idBase = 910000;
-        int idx = 0;
-        for (BlockPos pos : espBlocks) {
-            int crackStage = idx < 14 ? 9 : 7;
-            client.levelRenderer.destroyBlockProgress(idBase + idx, pos, crackStage);
-            idx++;
-            if (idx >= 350) {
-                break;
-            }
-        }
-
-        highlightedBlocks = new ArrayList<>(espBlocks);
+        // Visual path is drawn by renderPathEsp; no block-crack highlights needed.
     }
 
     private void renderPathEsp(LevelRenderContext context) {
@@ -1190,11 +1156,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
     }
 
     private void clearHighlights(Minecraft client) {
-        int idBase = 910000;
-        for (int i = 0; i < highlightedBlocks.size(); i++) {
-            client.levelRenderer.destroyBlockProgress(idBase + i, highlightedBlocks.get(i), -1);
-        }
-        highlightedBlocks = new ArrayList<>();
+        // No-op: block-crack highlights removed; visual path handled by renderPathEsp.
     }
 
     private String routePreviewText() {
