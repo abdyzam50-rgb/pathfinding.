@@ -116,6 +116,24 @@ public class AotvPathfinderClient implements ClientModInitializer {
     /** How far vertically a walk node may sit and still be considered patch-reachable on foot. */
     private static final double WALK_PATCH_MAX_VERTICAL = 2.5;
 
+    // --- failure detection / recovery ---
+    /** No measurable progress toward the current node for this long counts as stuck. */
+    private static final long STUCK_TIMEOUT_MS = 2500L;
+    /** Minimum gap between rebuild attempts, so a hard failure cannot spin the pathfinder. */
+    private static final long REBUILD_COOLDOWN_MS = 600L;
+    /** Consecutive rebuilds with no progress in between before the run gives up. */
+    private static final int MAX_CONSECUTIVE_REBUILDS = 4;
+    /** Being this far from the current node means we were knocked off the route entirely. */
+    private static final double OFF_ROUTE_DISTANCE = 7.0;
+    /** Distance improvement that counts as real progress rather than jitter. */
+    private static final double PROGRESS_EPSILON = 0.05;
+
+    private long lastProgressAtMs;
+    private double bestDistToNodeSq = Double.POSITIVE_INFINITY;
+    private int trackedStepIndex = -1;
+    private int rebuildAttempts;
+    private long lastRebuildAtMs;
+
     private static final AABB NORMAL_NODE_SHAPE = new AABB(0.12, 0.0, 0.12, 0.88, 0.95, 0.88);
     private static final AABB SHIFT_NODE_SHAPE  = new AABB(0.08, 0.0, 0.08, 0.92, 0.72, 0.92);
     private static final AABB WALK_NODE_SHAPE   = new AABB(0.28, 0.0, 0.28, 0.72, 0.28, 0.72);
@@ -168,6 +186,8 @@ public class AotvPathfinderClient implements ClientModInitializer {
                     )
             );
 
+            dispatcher.register(literal("clearpath").executes(this::executeClearAll));
+
             dispatcher.register(
                 literal("aotv")
                     .then(literal("mode")
@@ -184,6 +204,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
                         .then(literal("on").executes(ctx -> setAirChainCommand(true)))
                         .then(literal("off").executes(ctx -> setAirChainCommand(false)))
                     )
+                    .then(literal("clear").executes(this::executeClearAll))
                     .then(literal("show").executes(ctx -> showSettingsCommand()))
             );
         });
@@ -241,15 +262,20 @@ public class AotvPathfinderClient implements ClientModInitializer {
             return 0;
         }
 
-        activePath = new ArrayList<>();
-        livePreviewPath = new ArrayList<>();
-        livePlannedPath = new ArrayList<>();
-        currentStepIndex = 0;
-        liveStepIndex = 0;
-        prebuiltFurthestStepIndex = 0;
-        liveFurthestStepIndex = 0;
-        clearHighlights(client);
+        boolean keepGoal = true;
+        resetRunState(client, !keepGoal);
         sendChat(client.player, "Preview cleared.");
+        return 1;
+    }
+
+    /** Full state wipe: route, indices, timers, held inputs and the goal itself. */
+    private int executeClearAll(CommandContext<?> context) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null) {
+            return 0;
+        }
+        resetRunState(client, true);
+        sendChat(client.player, "Cleared route, goal, timers and all held inputs.");
         return 1;
     }
 
@@ -373,15 +399,8 @@ public class AotvPathfinderClient implements ClientModInitializer {
         }
 
         while (clearPathKey.consumeClick()) {
-            activePath = new ArrayList<>();
-            livePreviewPath = new ArrayList<>();
-            livePlannedPath = new ArrayList<>();
-            currentStepIndex = 0;
-            liveStepIndex = 0;
-            liveGoal = null;
-            resetLiveStabilizer();
-            stopWalking(client);
-            clearHighlights(client);
+            boolean keepGoal = true;
+            resetRunState(client, !keepGoal);
             sendChat(client.player, "Path cleared.");
         }
 
@@ -436,7 +455,14 @@ public class AotvPathfinderClient implements ClientModInitializer {
             return;
         }
 
-        List<TeleportHop> path = pathfinder.findPath(player, player.blockPosition(), goal, manaTracker.currentMana(), settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
+        List<TeleportHop> path;
+        try {
+            path = pathfinder.findPath(player, player.blockPosition(), goal, manaTracker.currentMana(), settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
+        } catch (Exception e) {
+            sendChat(player, "Pathfinder error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            e.printStackTrace();
+            return;
+        }
         if (path.isEmpty()) {
             sendChat(player, "No path found.");
             return;
@@ -444,6 +470,11 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
         activePath = path;
         currentStepIndex = 0;
+        // Clear residue from any previous run, or the forward-patch scan starts part-way in.
+        prebuiltFurthestStepIndex = 0;
+        resetProgressTracking();
+        resetLiveStabilizer();
+        rebuildAttempts = 0;
         int manaCost = path.stream().mapToInt(TeleportHop::manaCost).sum();
         sendChat(player, "Path built: " + path.size() + " steps, est mana " + manaCost + ".");
     }
@@ -492,11 +523,39 @@ public class AotvPathfinderClient implements ClientModInitializer {
         LocalPlayer player = client.player;
         if (currentStepIndex >= activePath.size()) {
             stopWalking(client);
+            // Ran out of route without arriving: the plan was stale, so make a new one.
+            if (goal != null && !isAtGoal(player)) {
+                attemptRebuild(client, "route ended short of goal");
+                return;
+            }
+            if (goal != null && isAtGoal(player)) {
+                sendChat(player, "Arrived.");
+                boolean keepGoal = true;
+                resetRunState(client, !keepGoal);
+            }
             return;
         }
 
         TeleportHop step = activePath.get(currentStepIndex);
         prebuiltFurthestStepIndex = Math.max(prebuiltFurthestStepIndex, currentStepIndex);
+
+        long tickNow = System.currentTimeMillis();
+
+        // Failsafe: knocked off the route entirely (fell, pushed, teleported by the server).
+        if (player.position().distanceToSqr(Vec3.atBottomCenterOf(step.landing()))
+                > OFF_ROUTE_DISTANCE * OFF_ROUTE_DISTANCE
+            && player.onGround()) {
+            if (attemptRebuild(client, "off route")) {
+                return;
+            }
+        }
+
+        // Failsafe: no headway toward this node for a while.
+        if (updateProgress(player, step, currentStepIndex, tickNow)) {
+            if (attemptRebuild(client, "stuck")) {
+                return;
+            }
+        }
         boolean fallingPastStep = !player.onGround() && player.getDeltaMovement().y < -0.08;
         if (fallingPastStep && (step.type() == TeleportHop.HopType.NORMAL || step.type() == TeleportHop.HopType.SHIFT) && player.getY() < step.landing().getY() - 1.1) {
             currentStepIndex++;
@@ -537,6 +596,11 @@ public class AotvPathfinderClient implements ClientModInitializer {
         Vec3 stepTarget = aimTargetForHop(player, step);
         if (!hasServerStyleCastClear(player, stepTarget)) {
             if (tryWalkAroundBlocked(player, now, false)) {
+                return;
+            }
+            // The hop is genuinely blocked. Blindly retiring the node here used to leave the router
+            // chasing a route that assumed a hop it never made; replan from where we actually are.
+            if (attemptRebuild(client, "hop blocked")) {
                 return;
             }
             currentStepIndex++;
@@ -977,6 +1041,178 @@ public class AotvPathfinderClient implements ClientModInitializer {
         client.options.keyLeft.setDown(false);
         client.options.keyRight.setDown(false);
         client.options.keyJump.setDown(false);
+    }
+
+    /**
+     * Releases every input the router can hold, including sneak.
+     *
+     * <p>{@link #stopWalking} deliberately leaves sneak alone because shift-hops toggle it
+     * mid-cast, but that means a run aborting between "shift down" and "cast complete" leaves the
+     * player crouched. Anything that ends or restarts a run must come through here instead.
+     */
+    private void releaseAllInputs(Minecraft client) {
+        stopWalking(client);
+        if (client.options != null) {
+            client.options.keyShift.setDown(false);
+            client.options.keySprint.setDown(false);
+        }
+        if (client.player != null) {
+            client.player.setShiftKeyDown(false);
+        }
+    }
+
+    /**
+     * Single authoritative teardown for a routing run.
+     *
+     * <p>Every field touched while routing is reset here. Partial resets scattered across the key
+     * handler and command handlers were leaving residue — most importantly
+     * {@code prebuiltFurthestStepIndex}/{@code liveFurthestStepIndex}, which gate the forward-patch
+     * scan via {@code max(currentStepIndex + 1, furthest)}. A stale furthest index from a previous
+     * run makes the next run begin its scan part-way down the path and skip nodes.
+     *
+     * @param clearGoal also forget the destination, not just the route to it
+     */
+    private void resetRunState(Minecraft client, boolean clearGoal) {
+        autoRun = false;
+        liveAi = false;
+
+        activePath = new ArrayList<>();
+        livePreviewPath = new ArrayList<>();
+        livePlannedPath = new ArrayList<>();
+        liveGoal = null;
+
+        currentStepIndex = 0;
+        liveStepIndex = 0;
+        prebuiltFurthestStepIndex = 0;
+        liveFurthestStepIndex = 0;
+
+        lastCastAtMs = 0L;
+        lastBlockedReplanAtMs = 0L;
+        lastReplanAtMs = 0L;
+        liveLastAdvanceAtMs = 0L;
+        lastClickChatAtMs = 0L;
+        castDebugCount = 0;
+
+        lastAimTarget = null;
+        aimStableSinceMs = 0L;
+        walkPitchLock = 8.0F;
+
+        resetLiveStabilizer();
+        resetProgressTracking();
+        rebuildAttempts = 0;
+        lastRebuildAtMs = 0L;
+
+        releaseAllInputs(client);
+        clearHighlights(client);
+
+        if (clearGoal) {
+            goal = null;
+        }
+    }
+
+    private boolean isAtGoal(LocalPlayer player) {
+        if (goal == null) {
+            return false;
+        }
+        Vec3 feet = player.position();
+        double dx = feet.x - (goal.getX() + 0.5);
+        double dz = feet.z - (goal.getZ() + 0.5);
+        return dx * dx + dz * dz <= HOP_ARRIVE_HORIZONTAL_SQ
+            && Math.abs(feet.y - goal.getY()) <= HOP_ARRIVE_ABOVE;
+    }
+
+    private void resetProgressTracking() {
+        lastProgressAtMs = 0L;
+        bestDistToNodeSq = Double.POSITIVE_INFINITY;
+        trackedStepIndex = -1;
+    }
+
+    /**
+     * Tracks how close we have ever gotten to the node currently being routed to.
+     *
+     * @return true if we are making no headway and should be considered stuck
+     */
+    private boolean updateProgress(LocalPlayer player, TeleportHop step, int stepIndex, long now) {
+        Vec3 target = Vec3.atBottomCenterOf(step.landing());
+        double distSq = player.position().distanceToSqr(target);
+
+        if (stepIndex != trackedStepIndex) {
+            // New node: start a fresh progress window.
+            trackedStepIndex = stepIndex;
+            bestDistToNodeSq = distSq;
+            lastProgressAtMs = now;
+            return false;
+        }
+
+        if (lastProgressAtMs == 0L) {
+            lastProgressAtMs = now;
+        }
+        if (distSq < bestDistToNodeSq - PROGRESS_EPSILON) {
+            bestDistToNodeSq = distSq;
+            lastProgressAtMs = now;
+            // Genuine headway clears the failure budget.
+            rebuildAttempts = 0;
+            return false;
+        }
+        return now - lastProgressAtMs > STUCK_TIMEOUT_MS;
+    }
+
+    /**
+     * Replans from wherever the player actually is now.
+     *
+     * <p>This is the reaction a player would have when a hop does not land or the way ahead closes
+     * up: drop the stale route, look at the current situation, and work out a fresh one — rather
+     * than blindly retiring the node and carrying on down a route that no longer applies.
+     *
+     * @return true if a fresh route was installed
+     */
+    private boolean attemptRebuild(Minecraft client, String reason) {
+        LocalPlayer player = client.player;
+        if (player == null || goal == null) {
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now - lastRebuildAtMs < REBUILD_COOLDOWN_MS) {
+            return false;
+        }
+        lastRebuildAtMs = now;
+
+        if (rebuildAttempts >= MAX_CONSECUTIVE_REBUILDS) {
+            sendChat(player, "Giving up after " + rebuildAttempts + " rebuilds (" + reason + "). Route stopped.");
+            boolean keepGoal = true;
+            resetRunState(client, !keepGoal);
+            return false;
+        }
+        rebuildAttempts++;
+
+        // Start from a clean slate so no held input or stale index leaks into the new route.
+        releaseAllInputs(client);
+
+        List<TeleportHop> path;
+        try {
+            path = pathfinder.findPath(player, player.blockPosition(), goal, manaTracker.currentMana(),
+                settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
+        } catch (Exception e) {
+            sendChat(player, "Rebuild failed (" + reason + "): " + e.getClass().getSimpleName());
+            e.printStackTrace();
+            return false;
+        }
+
+        if (path.isEmpty()) {
+            sendChat(player, "Rebuild " + rebuildAttempts + "/" + MAX_CONSECUTIVE_REBUILDS
+                + " found no path (" + reason + ").");
+            return false;
+        }
+
+        activePath = path;
+        currentStepIndex = 0;
+        prebuiltFurthestStepIndex = 0;
+        resetProgressTracking();
+        resetLiveStabilizer();
+
+        sendChat(player, "Rebuilt route (" + reason + "): " + path.size() + " steps.");
+        return true;
     }
 
     private BlockPos resolveDynamicGoal(Minecraft client) {
