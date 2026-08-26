@@ -551,9 +551,17 @@ public class AotvPathfinderClient implements ClientModInitializer {
         long tickNow = System.currentTimeMillis();
 
         // Failsafe: knocked off the route entirely (fell, pushed, teleported by the server).
-        if (player.position().distanceToSqr(Vec3.atBottomCenterOf(step.landing()))
-                > OFF_ROUTE_DISTANCE * OFF_ROUTE_DISTANCE
-            && player.onGround()) {
+        //
+        // Only meaningful while walking. Walk nodes sit about a block apart, so a large gap really
+        // does mean we came off the path. A teleport node is a hop *target*: standing a full hop
+        // away from it is the normal state before casting, and transmission reaches 12 blocks with
+        // etherwarp reaching 54, so distance alone says nothing there. Applying this to every node
+        // made each teleport node look off-route on arrival and rebuilt the same route on repeat.
+        // Teleport nodes are covered by the range guard and the stuck timer instead.
+        if (step.isWalk()
+            && player.onGround()
+            && player.position().distanceToSqr(Vec3.atBottomCenterOf(step.landing()))
+                > OFF_ROUTE_DISTANCE * OFF_ROUTE_DISTANCE) {
             if (attemptRebuild(client, "off route")) {
                 return;
             }
@@ -1851,8 +1859,17 @@ public class AotvPathfinderClient implements ClientModInitializer {
      * therefore measure past it and be rejected.
      */
     private boolean withinHopRange(LocalPlayer player, TeleportHop hop) {
+        // Horizontal only. A transmission landing is settled by gravity after the hop and may sit
+        // as much as MAX_GRAVITY_DROP below the point that was actually aimed at, so straight-line
+        // distance to the landing can far exceed the ability's reach for a perfectly valid hop.
+        // Settling moves the landing in Y alone and never in X/Z, so horizontal distance still
+        // reflects how far the hop really reaches.
+        Vec3 feet = player.position();
+        BlockPos landing = hop.landing();
+        double dx = feet.x - (landing.getX() + 0.5);
+        double dz = feet.z - (landing.getZ() + 0.5);
         double max = maxHopRange(hop.type()) + HOP_RANGE_TOLERANCE;
-        return player.position().distanceToSqr(Vec3.atBottomCenterOf(hop.landing())) <= max * max;
+        return dx * dx + dz * dz <= max * max;
     }
 
     private static double maxHopRange(TeleportHop.HopType type) {
