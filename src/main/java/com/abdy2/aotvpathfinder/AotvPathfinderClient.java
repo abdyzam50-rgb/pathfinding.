@@ -141,6 +141,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
     private long lastProgressAtMs;
     private double bestDistToNodeSq = Double.POSITIVE_INFINITY;
     private int trackedStepIndex = -1;
+    private boolean pendingFallReplan;
     private int rebuildAttempts;
     private long lastRebuildAtMs;
 
@@ -608,11 +609,27 @@ public class AotvPathfinderClient implements ClientModInitializer {
                 return;
             }
         }
-        boolean fallingPastStep = !player.onGround() && player.getDeltaMovement().y < -0.08;
-        if (fallingPastStep && (step.type() == TeleportHop.HopType.NORMAL || step.type() == TeleportHop.HopType.SHIFT) && player.getY() < step.landing().getY() - 1.1) {
-            currentStepIndex++;
-            prebuiltFurthestStepIndex = Math.max(prebuiltFurthestStepIndex, currentStepIndex);
+        // Falling. Nothing on the route can be acted on mid-air: a hop cannot be cast while
+        // dropping, and once we are below the node we were heading for the rest of the plan no
+        // longer describes where we are. Previously this advanced the index and returned, which
+        // ran once per tick and so retired a node every tick for the whole descent -- a two second
+        // fall burned about forty nodes without the player travelling anywhere near that far.
+        // Wait for the ground, then replan from wherever we actually ended up.
+        if (!player.onGround() && player.getDeltaMovement().y < -0.08) {
+            boolean fellPastNode = (step.type() == TeleportHop.HopType.NORMAL
+                    || step.type() == TeleportHop.HopType.SHIFT)
+                && player.getY() < step.landing().getY() - 1.1;
+            if (fellPastNode) {
+                pendingFallReplan = true;
+            }
+            stopWalking(client);
             return;
+        }
+        if (pendingFallReplan) {
+            pendingFallReplan = false;
+            if (attemptRebuild(client, "fell past node")) {
+                return;
+            }
         }
         if (isStepReached(player, step)) {
             currentStepIndex++;
@@ -708,21 +725,10 @@ public class AotvPathfinderClient implements ClientModInitializer {
         if (!noPath) {
             TeleportHop step = livePlannedPath.get(liveStepIndex);
             liveFurthestStepIndex = Math.max(liveFurthestStepIndex, liveStepIndex);
-            boolean fallingPastStep = !player.onGround() && player.getDeltaMovement().y < -0.08;
-            if (fallingPastStep && (step.type() == TeleportHop.HopType.NORMAL || step.type() == TeleportHop.HopType.SHIFT) && player.getY() < step.landing().getY() - 1.1) {
-                liveStepIndex++;
-                liveLastAdvanceAtMs = now;
-                markStepAdvanced(now);
-                liveFurthestStepIndex = Math.max(liveFurthestStepIndex, liveStepIndex);
-                if (liveStepIndex >= livePlannedPath.size()) {
-                    stopWalking(client);
-                    liveAi = false;
-                    resetLiveStabilizer();
-                    sendChat(player, "Live AI completed path and turned off.");
-                    return;
-                }
-                step = livePlannedPath.get(liveStepIndex);
-            }
+            // Falling past the current node no longer advances the index here. This runs every
+            // tick, so a descent retired one node per tick for its whole duration. Live AI
+            // replans continuously and will pick a node suited to wherever we actually land.
+            // Nothing else about the tick changes, so air-chain casting mid-fall still works.
 
             if (isStepReached(player, step)) {
                 liveStepIndex++;
@@ -1161,6 +1167,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         resetProgressTracking();
         rebuildAttempts = 0;
         lastRebuildAtMs = 0L;
+        pendingFallReplan = false;
 
         releaseAllInputs(client);
         clearHighlights(client);
@@ -1718,7 +1725,12 @@ public class AotvPathfinderClient implements ClientModInitializer {
             double nudge = 0.22;
             center = center.subtract((horizontal.x / len) * nudge, 0.0, (horizontal.z / len) * nudge);
         }
-        return new Vec3(center.x, floor.getY() + 0.92, center.z);
+        // Aim inside the landing air block. Offsetting from the floor block instead put the aim
+        // point 0.08 *below* the floor's top face, i.e. inside solid ground, and the cast check
+        // requires the ray to miss everything -- so every landing with a solid floor was judged
+        // blocked while air waypoints passed. This also matches the height the planner validates
+        // its corridor against (to.getY() + 0.92), so the two now agree on the same ray.
+        return new Vec3(center.x, landingAirBlock.getY() + 0.92, center.z);
     }
 
     /**
