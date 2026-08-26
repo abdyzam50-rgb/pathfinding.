@@ -796,9 +796,20 @@ public final class TeleportPathfinder {
             }
 
             int best = i;
+            // Collapsing consecutive hops must never produce one longer than the ability can
+            // actually cast. Without this the scan merges up to six hops on a clear corridor
+            // alone, so six transmission hops of ~12 blocks become a single ~72 block hop that
+            // nothing can perform, and the route stalls on its own first node.
+            int mergeRange = (hop.type() == TeleportHop.HopType.SHIFT)
+                ? AotvConfig.ETHERWARP_PLAN_RANGE
+                : AotvConfig.TRANSMISSION_RANGE;
+            double mergeRangeSq = (double) mergeRange * mergeRange;
             for (int j = Math.min(i + 6, input.size() - 1); j > i; j--) {
                 TeleportHop candidate = input.get(j);
                 if (candidate.type() != hop.type()) {
+                    continue;
+                }
+                if (current.distSqr(candidate.landing()) > mergeRangeSq) {
                     continue;
                 }
                 if (!hasTeleportCorridorClear(player, current, candidate.landing())) {
