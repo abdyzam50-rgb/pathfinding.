@@ -31,9 +31,16 @@ final class AotvWalkPathfinder {
     private static final double TIE_BREAKER_WEIGHT = 1e-6;
 
     private static final int[][] NEIGHBOR_OFFSETS = {
+        // Cardinal flat
         {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
-        {0, 1, 0}, {0, -1, 0},
-        {1, 0, 1}, {1, 0, -1}, {-1, 0, 1}, {-1, 0, -1}
+        // Diagonal flat
+        {1, 0, 1}, {1, 0, -1}, {-1, 0, 1}, {-1, 0, -1},
+        // Cardinal step-up (jump onto a 1-block-higher surface while moving)
+        {1, 1, 0}, {-1, 1, 0}, {0, 1, 1}, {0, 1, -1},
+        // Cardinal step-down (walk off a ledge onto 1-block-lower surface)
+        {1, -1, 0}, {-1, -1, 0}, {0, -1, 1}, {0, -1, -1},
+        // Pure vertical (ladder / vine only)
+        {0, 1, 0}, {0, -1, 0}
     };
 
     Result findPath(ClientPlayerEntity player, BlockPos start, BlockPos goal, int maxIterations, double goalRadius) {
@@ -75,7 +82,7 @@ final class AotvWalkPathfinder {
 
             double distSq = squaredDistance(current.x, current.y, current.z, goal.getX(), goal.getY(), goal.getZ());
             if (distSq <= goalRadius * goalRadius) {
-                return buildResult(current, nodeMap, true);
+                return buildResult(current, nodeMap, true, goal);
             }
 
             for (int[] offset : NEIGHBOR_OFFSETS) {
@@ -128,13 +135,29 @@ final class AotvWalkPathfinder {
             }
         }
 
-        return buildResult(bestFallback, nodeMap, false);
+        return buildResult(bestFallback, nodeMap, false, goal);
     }
 
     private boolean isTransitionValid(World world, NavPoint from, NavPoint to,
                                        int fromX, int fromY, int fromZ, int dx, int dy, int dz) {
         if (dy > 0 && (to.floorLevel - from.floorLevel) > DEFAULT_JUMP_HEIGHT) {
             return false;
+        }
+
+        // Step-up with horizontal movement: check the player's head clears the source column.
+        if (dy == 1 && (dx != 0 || dz != 0)) {
+            BlockPos headAbove = new BlockPos(fromX, fromY + 2, fromZ);
+            if (!canWalkThrough(world, world.getBlockState(headAbove), headAbove)) {
+                return false;
+            }
+        }
+
+        // Step-down with horizontal movement: require a solid landing — don't route
+        // off a cliff edge where the player would keep falling.
+        if (dy == -1 && (dx != 0 || dz != 0)) {
+            if (!to.hasFloor && !to.climbable) {
+                return false;
+            }
         }
 
         if (Math.abs(dx) == 1 && Math.abs(dz) == 1) {
@@ -257,7 +280,7 @@ final class AotvWalkPathfinder {
         return key;
     }
 
-    private Result buildResult(WalkNode endNode, Long2ObjectOpenHashMap<WalkNode> nodeMap, boolean reached) {
+    private Result buildResult(WalkNode endNode, Long2ObjectOpenHashMap<WalkNode> nodeMap, boolean reached, BlockPos goal) {
         List<BlockPos> rawPath = new ArrayList<>();
         WalkNode cursor = endNode;
         while (cursor != null) {
@@ -269,23 +292,15 @@ final class AotvWalkPathfinder {
 
         List<BlockPos> simplified = simplifyPath(rawPath);
 
-        double bestDistSq = reached ? 0.0 : squaredDistance(
-            endNode.x, endNode.y, endNode.z,
-            rawPath.isEmpty() ? 0 : rawPath.get(0).getX(),
-            rawPath.isEmpty() ? 0 : rawPath.get(0).getY(),
-            rawPath.isEmpty() ? 0 : rawPath.get(0).getZ());
-
-        if (!reached && !rawPath.isEmpty()) {
-            BlockPos last = rawPath.get(rawPath.size() - 1);
-            bestDistSq = squaredDistance(last.getX(), last.getY(), last.getZ(),
-                endNode.x, endNode.y, endNode.z);
-        }
-
         if (simplified.size() > 1) {
             simplified.remove(0);
         }
 
-        return new Result(simplified, reached, reached ? 0.0 : bestDistSq);
+        double bestDistSq = reached ? 0.0 : squaredDistance(
+            endNode.x, endNode.y, endNode.z,
+            goal.getX(), goal.getY(), goal.getZ());
+
+        return new Result(simplified, reached, bestDistSq);
     }
 
     private List<BlockPos> simplifyPath(List<BlockPos> path) {

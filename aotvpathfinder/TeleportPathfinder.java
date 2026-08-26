@@ -4,12 +4,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.PriorityQueue;
-import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -39,7 +35,7 @@ public final class TeleportPathfinder {
     private static final int JUST_TELEPORT_MIN_AIR_CLEARANCE = 13;
     private static final double JUST_TELEPORT_FINAL_WALK_RADIUS = 3.0;
     private static final int AIR_CHAIN_SAFE_FALL_DROP = 8;
-    private static final float WAYPOINT_MAX_YAW_DELTA_DEG = 95.0F;
+    private static final float WAYPOINT_MAX_YAW_DELTA_DEG = 145.0F;
 
     private static final List<BlockPos> SHORT_OFFSETS = buildShortOffsets();
     private static final List<BlockPos> LONG_OFFSETS = buildLongOffsets();
@@ -56,15 +52,6 @@ public final class TeleportPathfinder {
     };
 
     private final AotvWalkPathfinder walkPathfinder = new AotvWalkPathfinder();
-
-    public record CandidatePath(
-        List<TeleportHop> hops,
-        MovementMode movementMode,
-        TeleportMode teleportMode,
-        boolean airChainEnabled,
-        boolean reachedGoal,
-        double bestDistanceSq
-    ) {}
 
     public List<TeleportHop> findPath(
         ClientPlayerEntity player,
@@ -143,99 +130,9 @@ public final class TeleportPathfinder {
             }
         }
 
-
-
         return smoothTeleportRoute(player, start, bestFailed.hops());
     }
 
-
-    public List<CandidatePath> enumerateCandidatePaths(
-        ClientPlayerEntity player,
-        BlockPos start,
-        BlockPos goal,
-        int availableMana,
-        int maxPaths,
-        int maxExpansions
-    ) {
-        List<CandidatePath> out = new ArrayList<>();
-        Set<String> unique = new HashSet<>();
-
-        MovementMode[] movementModes = new MovementMode[] {
-            MovementMode.HYBRID,
-            MovementMode.WALK_ONLY,
-            MovementMode.TELEPORT_ONLY
-        };
-        TeleportMode[] teleportModes = new TeleportMode[] {
-            TeleportMode.HYBRID_TELEPORT,
-            TeleportMode.SHIFT_ONLY,
-            TeleportMode.JUST_TELEPORT
-        };
-        boolean[] airOptions = new boolean[] { false, true };
-
-        int manaBase = availableMana > 0 ? availableMana : 4000;
-        int[] manaVariants = new int[] {
-            manaBase,
-            (int) (manaBase * 0.75),
-            (int) (manaBase * 0.5),
-            (int) (manaBase * 0.25),
-            -1
-        };
-
-        int attempts = 0;
-        int maxAttempts = Math.max(18, Math.min(48, maxPaths * 2));
-
-        for (MovementMode movementMode : movementModes) {
-            for (TeleportMode teleportMode : teleportModes) {
-                for (boolean airChain : airOptions) {
-                    if (airChain && teleportMode == TeleportMode.SHIFT_ONLY) {
-                        continue;
-                    }
-                    for (int mana : manaVariants) {
-                        if (attempts++ >= maxAttempts) {
-                            return out;
-                        }
-                        List<TeleportHop> hops = findPath(player, start, goal, mana, movementMode, teleportMode, airChain);
-                        if (hops.isEmpty()) {
-                            continue;
-                        }
-
-                        String sig = pathSignature(hops);
-                        if (!unique.add(sig)) {
-                            continue;
-                        }
-
-                        boolean reachedGoal = pathReachesGoal(start, hops, goal);
-                        BlockPos end = hops.get(hops.size() - 1).landing();
-                        double bestDistanceSq = end.getSquaredDistance(goal);
-                        out.add(new CandidatePath(hops, movementMode, teleportMode, airChain, reachedGoal, bestDistanceSq));
-
-                        if (out.size() >= Math.max(1, maxPaths)) {
-                            return out;
-                        }
-                    }
-                }
-            }
-        }
-
-        return out;
-    }
-
-    private boolean pathReachesGoal(BlockPos start, List<TeleportHop> hops, BlockPos goal) {
-        BlockPos end = hops.isEmpty() ? start : hops.get(hops.size() - 1).landing();
-        return end.isWithinDistance(goal, AotvConfig.GOAL_REACHED_RADIUS);
-    }
-
-    private String pathSignature(List<TeleportHop> hops) {
-        StringBuilder sb = new StringBuilder(hops.size() * 16);
-        for (TeleportHop hop : hops) {
-            BlockPos p = hop.landing();
-            sb.append(hop.type().name()).append(':')
-                .append(p.getX()).append(',')
-                .append(p.getY()).append(',')
-                .append(p.getZ()).append(';');
-        }
-        return sb.toString();
-    }
     private SearchResult searchDirectAirChain(
         ClientPlayerEntity player,
         BlockPos start,
@@ -601,7 +498,7 @@ public final class TeleportPathfinder {
             }
             expansions++;
 
-            for (Neighbor neighbor : neighbors(player, current.pos, includeTeleports, allowAirNormalTeleports, teleportMode, goal)) {
+            for (Neighbor neighbor : neighbors(player, current.pos, start, includeTeleports, allowAirNormalTeleports, teleportMode, goal)) {
                 long neighborPacked = packPos(neighbor.pos);
                 GraphNode to = graph.get(neighborPacked);
                 boolean isNew = false;
@@ -645,10 +542,13 @@ public final class TeleportPathfinder {
         return startToCandidate + candidateToGoal <= startToGoal + slack;
     }
 
-    private Collection<Neighbor> neighbors(ClientPlayerEntity player, BlockPos from, boolean includeTeleports, boolean allowAirNormalTeleports, TeleportMode teleportMode, BlockPos goal) {
+    private Collection<Neighbor> neighbors(ClientPlayerEntity player, BlockPos from, BlockPos start, boolean includeTeleports, boolean allowAirNormalTeleports, TeleportMode teleportMode, BlockPos goal) {
         List<Neighbor> out = new ArrayList<>(SHORT_OFFSETS.size() + LONG_OFFSETS.size() + 16);
         double fromGoalSq = from.getSquaredDistance(goal);
-        float fromYaw = player.getYaw();
+        // For the starting node use the player's actual facing; for every subsequent node
+        // the player has already flicked to aim at this position, so their effective facing
+        // is the direction they just traveled (start → from).
+        float fromYaw = from.equals(start) ? player.getYaw() : yawTo(start, from);
 
         // Horizontal goal direction for straight-path bias.
         // Only the XZ plane matters — going vertically to clear terrain is not penalised.
@@ -734,7 +634,7 @@ public final class TeleportPathfinder {
                         continue;
                     }
                     float yawDelta = Math.abs(wrapDegrees(yawTo(from, aimPoint) - fromYaw));
-                    if (yawDelta > 120.0F) {
+                    if (yawDelta > 155.0F) {
                         continue;
                     }
 
@@ -1048,8 +948,44 @@ public final class TeleportPathfinder {
         // Check at upper-torso (1.05) and head (1.62) height.
         // The 1.05 offset is slightly above the block surface (Y+1.0) so the lower ray
         // clears small ground-level edges that previously clipped at 0.92.
-        return isRayClear(player, from, to, 1.05)
-            && isRayClear(player, from, to, 1.62);
+        if (!isRayClear(player, from, to, 1.05)) return false;
+        if (!isRayClear(player, from, to, 1.62)) return false;
+
+        // Boundary-trap detection: the player body is 0.6m wide (±0.3 from centre).
+        // A wall exactly one block away is only 0.2m from the body edge, so the
+        // centre ray passes cleanly while the real aim ray clips the wall in-game.
+        // When the landing position is adjacent to any solid block, also check two
+        // rays offset ±0.25 perpendicular to the aim direction at head height.
+        if (hasAdjacentSolid(player, from)) {
+            double dx = to.getX() - from.getX();
+            double dz = to.getZ() - from.getZ();
+            double horizLen = Math.sqrt(dx * dx + dz * dz);
+            if (horizLen > 0.001) {
+                double px = -dz / horizLen * 0.25;
+                double pz =  dx / horizLen * 0.25;
+                Vec3d toCenter = new Vec3d(to.getX() + 0.5, to.getY() + 0.92, to.getZ() + 0.5);
+                Vec3d edgeA = new Vec3d(from.getX() + 0.5 + px, from.getY() + 1.62, from.getZ() + 0.5 + pz);
+                Vec3d edgeB = new Vec3d(from.getX() + 0.5 - px, from.getY() + 1.62, from.getZ() + 0.5 - pz);
+                if (!rayClear(player, edgeA, toCenter)) return false;
+                if (!rayClear(player, edgeB, toCenter)) return false;
+            }
+        }
+        return true;
+    }
+
+    // Returns true when any cardinal neighbour at feet or head height is a solid block,
+    // meaning the player is against a wall and boundary-trap checks are needed.
+    private boolean hasAdjacentSolid(ClientPlayerEntity player, BlockPos pos) {
+        BlockPos head = pos.up();
+        BlockPos[] check = {
+            pos.north(), pos.south(), pos.east(), pos.west(),
+            head.north(), head.south(), head.east(), head.west()
+        };
+        for (BlockPos adj : check) {
+            if (!isChunkLoaded(player, adj)) continue;
+            if (!isPassableForPlayer(player, adj)) return true;
+        }
+        return false;
     }
 
     private List<BlockPos> buildShortWalkChain(ClientPlayerEntity player, BlockPos from, BlockPos to) {
@@ -1277,10 +1213,6 @@ public final class TeleportPathfinder {
         return feet.isAir() && head.isAir() && below.isSolidBlock(player.getEntityWorld(), pos.down());
     }
 
-    private double heuristic(BlockPos current, BlockPos goal) {
-        return heuristicWithStart(current, goal, null);
-    }
-
     private double heuristicWithStart(BlockPos current, BlockPos goal, BlockPos start) {
         int dx = Math.abs(current.getX() - goal.getX());
         int dz = Math.abs(current.getZ() - goal.getZ());
@@ -1355,8 +1287,8 @@ public final class TeleportPathfinder {
     private static List<BlockPos> buildShortOffsets() {
         List<BlockPos> out = new ArrayList<>();
         int max = AotvConfig.TRANSMISSION_RANGE;
-        for (int dx = -max; dx <= max; dx += 2) {
-            for (int dz = -max; dz <= max; dz += 2) {
+        for (int dx = -max; dx <= max; dx++) {
+            for (int dz = -max; dz <= max; dz++) {
                 for (int dy = -20; dy <= 38; dy++) {
                     double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
                     if (dist < 4 || dist > max) {
@@ -1366,6 +1298,9 @@ public final class TeleportPathfinder {
                 }
             }
         }
+        // Evaluate closer offsets first so expensive corridor checks on far
+        // candidates are skipped when a nearer valid hop is already found.
+        out.sort(Comparator.comparingInt(p -> p.getX() * p.getX() + p.getY() * p.getY() + p.getZ() * p.getZ()));
         return out;
     }
 
@@ -1460,10 +1395,6 @@ public final class TeleportPathfinder {
         }
     }
 }
-
-
-
-
 
 
 

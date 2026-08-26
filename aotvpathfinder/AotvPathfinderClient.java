@@ -9,18 +9,11 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.HashMap;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.io.IOException;
 
 import org.lwjgl.glfw.GLFW;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -53,7 +46,6 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShapes;
 import net.minecraft.world.RaycastContext;
-import net.minecraft.registry.Registries;
 
 public class AotvPathfinderClient implements ClientModInitializer {
     private static final KeyBinding.Category KEY_CATEGORY = KeyBinding.Category.create(Identifier.of("aotvpathfinder", "general"));
@@ -176,12 +168,6 @@ public class AotvPathfinderClient implements ClientModInitializer {
                         .then(literal("on").executes(ctx -> setAirChainCommand(true)))
                         .then(literal("off").executes(ctx -> setAirChainCommand(false)))
                     )
-                    .then(literal("exportpaths")
-                        .executes(ctx -> exportCandidatePathsCommand(30))
-                        .then(argument("count", IntegerArgumentType.integer(10, 300))
-                            .executes(ctx -> exportCandidatePathsCommand(IntegerArgumentType.getInteger(ctx, "count")))
-                        )
-                    )
                     .then(literal("show").executes(ctx -> showSettingsCommand()))
             );
         });
@@ -247,7 +233,6 @@ public class AotvPathfinderClient implements ClientModInitializer {
         prebuiltFurthestStepIndex = 0;
         liveFurthestStepIndex = 0;
         clearHighlights(client);
-        ExperimentalPathInsights.clear();
         sendChat(client.player, "Preview cleared.");
         return 1;
     }
@@ -332,185 +317,6 @@ public class AotvPathfinderClient implements ClientModInitializer {
             + ", lockMs=" + settings.commitLockMs());
         return 1;
     }
-    private int exportCandidatePathsCommand(int maxCandidates) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null) {
-            return 0;
-        }
-
-        BlockPos target = resolveDynamicGoal(client);
-        if (target == null) {
-            sendChat(player, "No goal to export. Use /setgoal x y z or look at a block.");
-            return 0;
-        }
-
-        BlockPos start = player.getBlockPos();
-        maxCandidates = Math.max(10, Math.min(maxCandidates, 120));
-        List<TeleportPathfinder.CandidatePath> candidates = pathfinder.enumerateCandidatePaths(
-            player,
-            start,
-            target,
-            manaTracker.currentMana(),
-            maxCandidates,
-            22000
-        );
-
-        if (candidates.isEmpty()) {
-            sendChat(player, "No candidate paths found for export.");
-            return 0;
-        }
-
-        List<Map<String, Object>> candidateJson = new ArrayList<>();
-        for (TeleportPathfinder.CandidatePath candidate : candidates) {
-            Map<String, Object> candidateMap = new HashMap<>();
-            candidateMap.put("movement_mode", candidate.movementMode().name());
-            candidateMap.put("teleport_mode", candidate.teleportMode().name());
-            candidateMap.put("airchain", candidate.airChainEnabled());
-            candidateMap.put("reached_goal", candidate.reachedGoal());
-            candidateMap.put("best_distance_sq", candidate.bestDistanceSq());
-
-            int mana = 0;
-            int walk = 0;
-            int normal = 0;
-            int shift = 0;
-            List<Map<String, Object>> steps = new ArrayList<>();
-            for (TeleportHop hop : candidate.hops()) {
-                Map<String, Object> step = new HashMap<>();
-                step.put("x", hop.landing().getX());
-                step.put("y", hop.landing().getY());
-                step.put("z", hop.landing().getZ());
-                step.put("type", hop.type().name());
-                step.put("mana", hop.manaCost());
-                steps.add(step);
-
-                mana += hop.manaCost();
-                if (hop.type() == TeleportHop.HopType.WALK) {
-                    walk++;
-                } else if (hop.type() == TeleportHop.HopType.SHIFT) {
-                    shift++;
-                } else {
-                    normal++;
-                }
-            }
-            candidateMap.put("mana_cost", mana);
-            candidateMap.put("steps_total", candidate.hops().size());
-            candidateMap.put("steps_walk", walk);
-            candidateMap.put("steps_normal", normal);
-            candidateMap.put("steps_shift", shift);
-            candidateMap.put("steps", steps);
-            candidateJson.add(candidateMap);
-        }
-
-        Map<String, Object> root = new HashMap<>();
-        Map<String, Object> meta = new HashMap<>();
-        meta.put("generated_at_ms", System.currentTimeMillis());
-        meta.put("world", client.world.getRegistryKey().getValue().toString());
-        meta.put("start", Map.of("x", start.getX(), "y", start.getY(), "z", start.getZ()));
-        meta.put("goal", Map.of("x", target.getX(), "y", target.getY(), "z", target.getZ()));
-        meta.put("candidate_count", candidateJson.size());
-        root.put("meta", meta);
-        root.put("candidates", candidateJson);
-        root.put("obstacles", captureObstacleData(client, start, target, candidates));
-
-        Gson gson = new GsonBuilder().setPrettyPrinting().create();
-        Path out = client.runDirectory.toPath().resolve("config").resolve("aotv-path-candidates.json");
-        try {
-            Files.createDirectories(out.getParent());
-            Files.writeString(out, gson.toJson(root));
-        } catch (IOException e) {
-            sendChat(player, "Failed writing JSON: " + e.getMessage());
-            return 0;
-        }
-
-        ExperimentalPathInsights.buildFromCandidates(start, target, candidates);
-        sendChat(player, "Exported " + candidateJson.size() + " candidate paths to " + out.toAbsolutePath());
-        return 1;
-    }
-
-    private Map<String, Object> captureObstacleData(
-        MinecraftClient client,
-        BlockPos start,
-        BlockPos goal,
-        List<TeleportPathfinder.CandidatePath> candidates
-    ) {
-        int minX = Math.min(start.getX(), goal.getX());
-        int minY = Math.min(start.getY(), goal.getY());
-        int minZ = Math.min(start.getZ(), goal.getZ());
-        int maxX = Math.max(start.getX(), goal.getX());
-        int maxY = Math.max(start.getY(), goal.getY());
-        int maxZ = Math.max(start.getZ(), goal.getZ());
-
-        for (TeleportPathfinder.CandidatePath candidate : candidates) {
-            for (TeleportHop hop : candidate.hops()) {
-                BlockPos p = hop.landing();
-                minX = Math.min(minX, p.getX());
-                minY = Math.min(minY, p.getY());
-                minZ = Math.min(minZ, p.getZ());
-                maxX = Math.max(maxX, p.getX());
-                maxY = Math.max(maxY, p.getY());
-                maxZ = Math.max(maxZ, p.getZ());
-            }
-        }
-
-        int margin = 6;
-        minX -= margin;
-        minY -= margin;
-        minZ -= margin;
-        maxX += margin;
-        maxY += margin;
-        maxZ += margin;
-
-        long volume = (long) (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
-        if (volume > 90000L) {
-            int midY = (minY + maxY) / 2;
-            minY = midY - 32;
-            maxY = midY + 32;
-        }
-
-        int sampleStride = volume > 180000L ? 3 : (volume > 70000L ? 2 : 1);
-        List<Map<String, Object>> blocks = new ArrayList<>();
-        for (int x = minX; x <= maxX; x += sampleStride) {
-            for (int y = minY; y <= maxY; y += sampleStride) {
-                for (int z = minZ; z <= maxZ; z += sampleStride) {
-                    BlockPos pos = new BlockPos(x, y, z);
-                    BlockState state = client.world.getBlockState(pos);
-                    boolean collisionEmpty = state.getCollisionShape(client.world, pos).isEmpty();
-                    boolean avoidWalk = !collisionEmpty;
-                    boolean avoidTeleport = !state.isAir();
-                    if (!avoidWalk && !avoidTeleport) {
-                        continue;
-                    }
-
-                    Map<String, Object> b = new HashMap<>();
-                    b.put("x", x);
-                    b.put("y", y);
-                    b.put("z", z);
-                    b.put("id", Registries.BLOCK.getId(state.getBlock()).toString());
-                    b.put("solid", state.isSolidBlock(client.world, pos));
-                    b.put("collision_empty", collisionEmpty);
-                    b.put("avoid_walk", avoidWalk);
-                    b.put("avoid_teleport", avoidTeleport);
-                    blocks.add(b);
-                }
-            }
-        }
-
-        Map<String, Object> bounds = new HashMap<>();
-        bounds.put("min_x", minX);
-        bounds.put("min_y", minY);
-        bounds.put("min_z", minZ);
-        bounds.put("max_x", maxX);
-        bounds.put("max_y", maxY);
-        bounds.put("max_z", maxZ);
-
-        Map<String, Object> out = new HashMap<>();
-        out.put("bounds", bounds);
-        out.put("block_count", blocks.size());
-        out.put("sample_stride", sampleStride);
-        out.put("blocks", blocks);
-        return out;
-    }
     private void onClientTick(MinecraftClient client) {
         if (client.player == null || client.world == null) {
             return;
@@ -551,7 +357,6 @@ public class AotvPathfinderClient implements ClientModInitializer {
             resetLiveStabilizer();
             stopWalking(client);
             clearHighlights(client);
-            ExperimentalPathInsights.clear();
             sendChat(client.player, "Path cleared.");
         }
 
@@ -1363,7 +1168,6 @@ public class AotvPathfinderClient implements ClientModInitializer {
         }
 
         context.matrices().pop();
-        ExperimentalPathInsights.renderWorld(context, client);
     }
 
     private void drawLine(WorldRenderContext context, VertexConsumer lines,
@@ -1843,54 +1647,3 @@ public class AotvPathfinderClient implements ClientModInitializer {
         player.sendMessage(Text.literal("[AOTV] " + msg), false);
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
