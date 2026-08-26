@@ -1,0 +1,16 @@
+# Gradle
+.gradle/
+build/
+run/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.class
+
+# Fabric Loom generated files
+.loom-cache/
+
+# macOS
+.DS_Store
