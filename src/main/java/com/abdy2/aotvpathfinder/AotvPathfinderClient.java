@@ -116,15 +116,14 @@ public class AotvPathfinderClient implements ClientModInitializer {
     /** How far vertically a walk node may sit and still be considered patch-reachable on foot. */
     private static final double WALK_PATCH_MAX_VERTICAL = 2.5;
     /**
-     * Absolute margin held back from nominal hop range.
+     * Tolerance added to nominal hop range when validating a hop client-side.
      *
-     * <p>Deliberately absolute rather than proportional, because the error it covers does not scale
-     * with distance. The player stands somewhere inside their own block and we aim at a point on
-     * the target, so real eye-to-target distance can exceed the block-grid figure by roughly half a
-     * block at each end, plus a little drift while turning to aim. A percentage would throw away
-     * several usable blocks of etherwarp reach to cover what is really a fixed ~1 block of slop.
+     * <p>Added, not subtracted. Keeping a hop castable is the planner's job, and it already
+     * generates conservatively. This guard exists only to catch the forward patch leapfrogging onto
+     * a node far outside the ability's reach, so it should sit just above what the planner emits.
+     * Subtracting a margin here instead rejected legitimate hops and rebuilt the route on the spot.
      */
-    private static final double HOP_RANGE_MARGIN = 1.5;
+    private static final double HOP_RANGE_TOLERANCE = 1.0;
 
     // --- failure detection / recovery ---
     /** No measurable progress toward the current node for this long counts as stuck. */
@@ -607,8 +606,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
         // Out of reach for the ability that performs this hop. Aiming and clicking would never
         // land, so react now rather than waiting for the stuck timer to notice.
-        double stepMaxRange = Math.max(1.0, maxHopRange(step.type()) - HOP_RANGE_MARGIN);
-        if (player.getEyePosition().distanceToSqr(stepTarget) > stepMaxRange * stepMaxRange) {
+        if (!withinHopRange(player, step)) {
             attemptRebuild(client, "node out of range");
             return;
         }
@@ -1837,12 +1835,24 @@ public class AotvPathfinderClient implements ClientModInitializer {
         // range check any distant node in open view wins: every walk node in between is discarded
         // and the router then parks on a node it can never cast to (transmission reaches 12 blocks,
         // etherwarp 61). Bound by the range of the ability that would actually perform the hop.
-        Vec3 target = aimTargetForHop(player, hop);
-        double maxRange = Math.max(1.0, maxHopRange(hop.type()) - HOP_RANGE_MARGIN);
-        if (player.getEyePosition().distanceToSqr(target) > maxRange * maxRange) {
+        if (!withinHopRange(player, hop)) {
             return false;
         }
-        return hasCastLineFor(player, hop, target);
+        return hasCastLineFor(player, hop, aimTargetForHop(player, hop));
+    }
+
+    /**
+     * Whether {@code hop} is close enough to be cast from where the player stands.
+     *
+     * <p>Measured feet-to-landing, matching how the planner reasons about hop length. Measuring
+     * eye-to-aim-point instead does not agree with it: the eye sits ~1.62 above the feet while the
+     * transmission aim point sits just below the landing block, which shortens level hops and
+     * noticeably lengthens downward ones. A downward hop well inside the ability's reach could
+     * therefore measure past it and be rejected.
+     */
+    private boolean withinHopRange(LocalPlayer player, TeleportHop hop) {
+        double max = maxHopRange(hop.type()) + HOP_RANGE_TOLERANCE;
+        return player.position().distanceToSqr(Vec3.atBottomCenterOf(hop.landing())) <= max * max;
     }
 
     private static double maxHopRange(TeleportHop.HopType type) {
