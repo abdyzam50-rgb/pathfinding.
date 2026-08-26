@@ -1191,7 +1191,9 @@ public final class TeleportPathfinder {
 
     private static List<BlockPos> buildLongOffsets() {
         List<BlockPos> out = new ArrayList<>();
-        int max = AotvConfig.ETHERWARP_RANGE;
+        // Plan range, not true range: a candidate generated at exactly ETHERWARP_RANGE is only
+        // castable when the player happens to stand on the near edge of their block.
+        int max = AotvConfig.ETHERWARP_PLAN_RANGE;
         List<Integer> distances = new ArrayList<>();
         for (int d = AotvConfig.TRANSMISSION_RANGE + 1; d <= max; d += 4) {
             distances.add(d);

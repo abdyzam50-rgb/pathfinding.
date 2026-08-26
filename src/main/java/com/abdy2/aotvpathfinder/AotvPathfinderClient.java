@@ -116,10 +116,15 @@ public class AotvPathfinderClient implements ClientModInitializer {
     /** How far vertically a walk node may sit and still be considered patch-reachable on foot. */
     private static final double WALK_PATCH_MAX_VERTICAL = 2.5;
     /**
-     * Fraction of nominal hop range we are willing to patch to. Kept under 1.0 so we never commit
-     * to a node sitting exactly on the edge, where the server's own range check may disagree.
+     * Absolute margin held back from nominal hop range.
+     *
+     * <p>Deliberately absolute rather than proportional, because the error it covers does not scale
+     * with distance. The player stands somewhere inside their own block and we aim at a point on
+     * the target, so real eye-to-target distance can exceed the block-grid figure by roughly half a
+     * block at each end, plus a little drift while turning to aim. A percentage would throw away
+     * several usable blocks of etherwarp reach to cover what is really a fixed ~1 block of slop.
      */
-    private static final double HOP_RANGE_SAFETY = 0.92;
+    private static final double HOP_RANGE_MARGIN = 1.5;
 
     // --- failure detection / recovery ---
     /** No measurable progress toward the current node for this long counts as stuck. */
@@ -602,13 +607,13 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
         // Out of reach for the ability that performs this hop. Aiming and clicking would never
         // land, so react now rather than waiting for the stuck timer to notice.
-        double stepMaxRange = maxHopRange(step.type()) * HOP_RANGE_SAFETY;
+        double stepMaxRange = Math.max(1.0, maxHopRange(step.type()) - HOP_RANGE_MARGIN);
         if (player.getEyePosition().distanceToSqr(stepTarget) > stepMaxRange * stepMaxRange) {
             attemptRebuild(client, "node out of range");
             return;
         }
 
-        if (!hasServerStyleCastClear(player, stepTarget)) {
+        if (!hasCastLineFor(player, step, stepTarget)) {
             if (tryWalkAroundBlocked(player, now, false)) {
                 return;
             }
@@ -789,7 +794,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
         Vec3 nextTarget = aimTargetForHop(player, next);
         updateSpinDetector(player, nextTarget, now);
-        if (!hasServerStyleCastClear(player, nextTarget)) {
+        if (!hasCastLineFor(player, next, nextTarget)) {
             boolean switched = tryLocalBlockedRayFallback(player, now);
             if (switched) {
                 return;
@@ -962,7 +967,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
                 continue;
             }
             Vec3 altTarget = aimTargetForHop(player, alt);
-            if (!hasServerStyleCastClear(player, altTarget)) {
+            if (!hasCastLineFor(player, alt, altTarget)) {
                 continue;
             }
             float yaw = desiredYaw(player, altTarget);
@@ -1616,6 +1621,38 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return new Vec3(center.x, floor.getY() + 0.92, center.z);
     }
 
+    /**
+     * Whether {@code hop} can actually be cast from where the player is standing.
+     *
+     * <p>The two abilities need opposite things from the raycast, so they cannot share one test:
+     *
+     * <ul>
+     *   <li><b>Transmission</b> teleports you to an empty spot, so the ray must reach the target
+     *       without hitting anything — a clean miss.
+     *   <li><b>Etherwarp</b> is aimed <i>at</i> a solid block and puts you on top of it, so the ray
+     *       must <i>hit</i> that exact block. Any face works.
+     * </ul>
+     *
+     * <p>Using the miss-based test for etherwarp rejects every shift hop, because the aim point is
+     * the centre of a solid block and a ray toward it always hits.
+     */
+    private boolean hasCastLineFor(LocalPlayer player, TeleportHop hop, Vec3 target) {
+        if (hop.type() == TeleportHop.HopType.SHIFT) {
+            return etherwarpRayHitsTarget(player, hop.landing().below(), target);
+        }
+        return hasServerStyleCastClear(player, target);
+    }
+
+    /** True when the aim ray lands on {@code solid} itself rather than something in front of it. */
+    private boolean etherwarpRayHitsTarget(LocalPlayer player, BlockPos solid, Vec3 target) {
+        HitResult hit = player.level().clip(new ClipContext(
+            player.getEyePosition(), target, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player
+        ));
+        return hit instanceof BlockHitResult blockHit
+            && blockHit.getType() == HitResult.Type.BLOCK
+            && blockHit.getBlockPos().equals(solid);
+    }
+
     private boolean hasServerStyleCastClear(LocalPlayer player, Vec3 target) {
         Vec3 start = player.getEyePosition();
         HitResult colliderHit = player.level().clip(new ClipContext(
@@ -1801,11 +1838,11 @@ public class AotvPathfinderClient implements ClientModInitializer {
         // and the router then parks on a node it can never cast to (transmission reaches 12 blocks,
         // etherwarp 61). Bound by the range of the ability that would actually perform the hop.
         Vec3 target = aimTargetForHop(player, hop);
-        double maxRange = maxHopRange(hop.type()) * HOP_RANGE_SAFETY;
+        double maxRange = Math.max(1.0, maxHopRange(hop.type()) - HOP_RANGE_MARGIN);
         if (player.getEyePosition().distanceToSqr(target) > maxRange * maxRange) {
             return false;
         }
-        return hasServerStyleCastClear(player, target);
+        return hasCastLineFor(player, hop, target);
     }
 
     private static double maxHopRange(TeleportHop.HopType type) {
