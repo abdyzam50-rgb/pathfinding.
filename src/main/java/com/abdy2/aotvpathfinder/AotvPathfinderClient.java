@@ -26,6 +26,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
+import net.minecraft.client.renderer.state.level.LevelRenderState;
 
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.SlabBlock;
@@ -1008,7 +1009,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
             }
         }
 
-        Vec3 cam = context.gameRenderer().getMainCamera().position();
+        Vec3 cam = context.levelState().cameraRenderState.pos;
         if (cam == null || context.poseStack() == null || context.bufferSource() == null) return;
 
         VertexConsumer lines = context.bufferSource().getBuffer(RenderTypes.lines());
