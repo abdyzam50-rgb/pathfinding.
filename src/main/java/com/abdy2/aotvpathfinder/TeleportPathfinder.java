@@ -11,12 +11,12 @@ import java.util.concurrent.ThreadLocalRandom;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.ClipContext;
 
 public final class TeleportPathfinder {
     public enum MovementMode {
@@ -45,7 +45,6 @@ public final class TeleportPathfinder {
         new BlockPos(1, 0, 1), new BlockPos(1, 0, -1),
         new BlockPos(-1, 0, 1), new BlockPos(-1, 0, -1)
     };
-    // 2-block cardinal jump-over offsets (same Y, one solid block in between).
     private static final BlockPos[] JUMP_OFFSETS = new BlockPos[] {
         new BlockPos(2, 0, 0), new BlockPos(-2, 0, 0),
         new BlockPos(0, 0, 2), new BlockPos(0, 0, -2)
@@ -54,7 +53,7 @@ public final class TeleportPathfinder {
     private final AotvWalkPathfinder walkPathfinder = new AotvWalkPathfinder();
 
     public List<TeleportHop> findPath(
-        ClientPlayerEntity player,
+        LocalPlayer player,
         BlockPos start,
         BlockPos goal,
         int availableMana,
@@ -62,13 +61,13 @@ public final class TeleportPathfinder {
         TeleportMode teleportMode,
         boolean allowAirChain
     ) {
-        if (start.isWithinDistance(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
+        if (start.closerThan(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
             return List.of();
         }
 
         MovementMode resolvedMode = mode == null ? MovementMode.HYBRID : mode;
         TeleportMode resolvedTeleportMode = teleportMode == null ? TeleportMode.HYBRID_TELEPORT : teleportMode;
-        int distance = (int) Math.sqrt(start.getSquaredDistance(goal));
+        int distance = (int) Math.sqrt(start.distSqr(goal));
         SearchResult bestFailed = SearchResult.empty();
 
         if (allowAirChain && resolvedTeleportMode != TeleportMode.SHIFT_ONLY) {
@@ -76,11 +75,8 @@ public final class TeleportPathfinder {
             if (airChain.reachedGoal()) {
                 return smoothTeleportRoute(player, start, airChain.hops());
             }
-            // Also accept the chain when it made substantial progress — the live AI
-            // will replan from the new position for the remaining distance.
-            // "Progress" = got within 25 blocks absolute OR covered ≥ 80 % of the way.
             if (!airChain.hops().isEmpty()) {
-                double startDistSq = start.getSquaredDistance(goal);
+                double startDistSq = start.distSqr(goal);
                 boolean nearGoal     = airChain.bestDistanceSq() < 25.0 * 25.0;
                 boolean mostlyClosed = airChain.bestDistanceSq() < startDistSq * 0.20;
                 if (nearGoal || mostlyClosed) {
@@ -134,7 +130,7 @@ public final class TeleportPathfinder {
     }
 
     private SearchResult searchDirectAirChain(
-        ClientPlayerEntity player,
+        LocalPlayer player,
         BlockPos start,
         BlockPos goal,
         int availableMana,
@@ -144,30 +140,23 @@ public final class TeleportPathfinder {
         LongOpenHashSet seen = new LongOpenHashSet(512);
         BlockPos current = start;
         BlockPos previous = null;
-        Vec3d smoothedDir = null;
+        Vec3 smoothedDir = null;
         seen.add(packPos(current));
 
         double horizontalStartDist = Math.hypot(start.getX() - goal.getX(), start.getZ() - goal.getZ());
-        // Hard ceiling: never plan hops above the world build limit.
-        // getTopY() is exclusive (e.g. 320 for overworld) — leave a 15-block safety gap.
-        // HeightLimitView: getBottomY() + getHeight() gives the exclusive top Y.
-        // Subtract 15 to leave a safety gap below the world ceiling.
-        int worldCeiling = player.getEntityWorld().getBottomY() + player.getEntityWorld().getHeight() - 15;
-        // Scale cruise altitude generously — the air chain clears terrain by arcing above it.
+        int worldCeiling = player.level().getMinY() + player.level().getHeight() - 15;
         int cruiseLift = Math.max(54, Math.min(520, (int) (horizontalStartDist * 1.6)));
         int cruiseY = Math.min(worldCeiling, Math.max(start.getY(), goal.getY()) + cruiseLift);
         if (goal.getY() - start.getY() > 20) {
-            // When the goal itself is much higher, add extra altitude above it.
             cruiseY = Math.min(worldCeiling, cruiseY + Math.min(300, goal.getY() - start.getY()));
         }
         int maxHopsByMana = availableMana > 0 ? Math.max(1, availableMana / AotvConfig.TRANSMISSION_MANA) : 200;
-        // 80 hops minimum — below that the chain can't complete the climb + traverse + descent arc.
         int maxHops = Math.min(420, Math.max(80, maxHopsByMana));
-        double bestDistSq = current.getSquaredDistance(goal);
+        double bestDistSq = current.distSqr(goal);
         BlockPos bestPos = current;
 
         for (int i = 0; i < maxHops; i++) {
-            if (current.isWithinDistance(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
+            if (current.closerThan(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
                 return new SearchResult(hops, true, 0.0);
             }
 
@@ -177,16 +166,16 @@ public final class TeleportPathfinder {
             }
 
             hops.add(new TeleportHop(next, TeleportHop.HopType.NORMAL, AotvConfig.TRANSMISSION_MANA));
-            Vec3d hopVec = Vec3d.ofCenter(next).subtract(Vec3d.ofCenter(current));
+            Vec3 hopVec = Vec3.atCenterOf(next).subtract(Vec3.atCenterOf(current));
             double hopLen = Math.sqrt(hopVec.x * hopVec.x + hopVec.y * hopVec.y + hopVec.z * hopVec.z);
             if (hopLen > 0.001) {
-                Vec3d hopDir = hopVec.multiply(1.0 / hopLen);
+                Vec3 hopDir = hopVec.scale(1.0 / hopLen);
                 if (smoothedDir == null) {
                     smoothedDir = hopDir;
                 } else {
-                    Vec3d blended = smoothedDir.multiply(0.75).add(hopDir.multiply(0.25));
+                    Vec3 blended = smoothedDir.scale(0.75).add(hopDir.scale(0.25));
                     double blendedLen = Math.sqrt(blended.x * blended.x + blended.y * blended.y + blended.z * blended.z);
-                    smoothedDir = blendedLen > 0.001 ? blended.multiply(1.0 / blendedLen) : smoothedDir;
+                    smoothedDir = blendedLen > 0.001 ? blended.scale(1.0 / blendedLen) : smoothedDir;
                 }
             }
 
@@ -194,7 +183,7 @@ public final class TeleportPathfinder {
             current = next;
             seen.add(packPos(current));
 
-            double distSq = current.getSquaredDistance(goal);
+            double distSq = current.distSqr(goal);
             if (distSq < bestDistSq) {
                 bestDistSq = distSq;
                 bestPos = current;
@@ -222,24 +211,22 @@ public final class TeleportPathfinder {
 
         return new SearchResult(hops, false, bestDistSq);
     }
+
     private BlockPos pickDirectAirChainStep(
-        ClientPlayerEntity player,
+        LocalPlayer player,
         BlockPos from,
         BlockPos goal,
         TeleportMode teleportMode,
         LongOpenHashSet seen,
         BlockPos previousFrom,
-        Vec3d lockedDirection,
+        Vec3 lockedDirection,
         int cruiseY
     ) {
-        double fromDist = Math.sqrt(from.getSquaredDistance(goal));
+        double fromDist = Math.sqrt(from.distSqr(goal));
         boolean blockedToGoal = !hasTeleportCorridorClear(player, from, goal);
-        Vec3d toGoal = Vec3d.ofCenter(goal).subtract(Vec3d.ofCenter(from));
-        Vec3d goalDir = toGoal.lengthSquared() > 0.001 ? toGoal.normalize() : new Vec3d(0.0, 0.0, 0.0);
+        Vec3 toGoal = Vec3.atCenterOf(goal).subtract(Vec3.atCenterOf(from));
+        Vec3 goalDir = toGoal.lengthSqr() > 0.001 ? toGoal.normalize() : new Vec3(0.0, 0.0, 0.0);
         double horizontalDist = Math.hypot(from.getX() - goal.getX(), from.getZ() - goal.getZ());
-        // Only enter descent once we have actually reached the cruise altitude.
-        // Without this guard the chain enters descendPhase the moment it rises above goal.Y + 10,
-        // which immediately kills any high-altitude arc before it can clear terrain.
         boolean hasReachedCruise = from.getY() >= cruiseY - 6;
         boolean descendPhase = horizontalDist <= 26.0 || (hasReachedCruise && from.getY() > goal.getY() + 10);
 
@@ -248,7 +235,7 @@ public final class TeleportPathfinder {
 
         for (BlockPos offset : SHORT_OFFSETS) {
 
-            BlockPos candidate = from.add(offset);
+            BlockPos candidate = from.offset(offset);
             if (seen.contains(packPos(candidate))) {
                 continue;
             }
@@ -256,7 +243,7 @@ public final class TeleportPathfinder {
                 continue;
             }
 
-            if (!isPassableForPlayer(player, candidate) || !isPassableForPlayer(player, candidate.up())) {
+            if (!isPassableForPlayer(player, candidate) || !isPassableForPlayer(player, candidate.above())) {
                 continue;
             }
 
@@ -268,7 +255,7 @@ public final class TeleportPathfinder {
                 continue;
             }
 
-            double candidateDist = Math.sqrt(candidate.getSquaredDistance(goal));
+            double candidateDist = Math.sqrt(candidate.distSqr(goal));
             if (descendPhase && from.getY() - goal.getY() > 4 && offset.getY() > -2) {
                 continue;
             }
@@ -289,16 +276,15 @@ public final class TeleportPathfinder {
                 continue;
             }
 
-            Vec3d step = Vec3d.ofCenter(candidate).subtract(Vec3d.ofCenter(from));
+            Vec3 step = Vec3.atCenterOf(candidate).subtract(Vec3.atCenterOf(from));
             double stepLen = Math.sqrt(step.x * step.x + step.y * step.y + step.z * step.z);
-            Vec3d stepDir = stepLen > 0.001 ? step.multiply(1.0 / stepLen) : new Vec3d(0.0, 0.0, 0.0);
-            double alignment = step.lengthSquared() > 0.001 ? goalDir.dotProduct(stepDir) : 0.0;
+            Vec3 stepDir = stepLen > 0.001 ? step.scale(1.0 / stepLen) : new Vec3(0.0, 0.0, 0.0);
+            double alignment = step.lengthSqr() > 0.001 ? goalDir.dot(stepDir) : 0.0;
 
             double lockPenalty = 0.0;
             if (lockedDirection != null && stepLen > 0.001 && !descendPhase) {
-                double lockAlign = lockedDirection.dotProduct(stepDir);
+                double lockAlign = lockedDirection.dot(stepDir);
                 lockPenalty = Math.max(0.0, 1.0 - lockAlign) * 7.5;
-                // Keep heading fixed unless a turn is truly needed.
                 if (lockAlign < 0.97 && candidateDist > fromDist - 0.55) {
                     continue;
                 }
@@ -308,22 +294,20 @@ public final class TeleportPathfinder {
 
             double turnPenalty = 0.0;
             if (previousFrom != null) {
-                Vec3d prevStep = Vec3d.ofCenter(from).subtract(Vec3d.ofCenter(previousFrom));
+                Vec3 prevStep = Vec3.atCenterOf(from).subtract(Vec3.atCenterOf(previousFrom));
                 double prevLen = Math.sqrt(prevStep.x * prevStep.x + prevStep.y * prevStep.y + prevStep.z * prevStep.z);
                 if (prevLen > 0.001 && stepLen > 0.001) {
-                    Vec3d prevDir = prevStep.multiply(1.0 / prevLen);
-                    double continuity = prevDir.dotProduct(stepDir);
+                    Vec3 prevDir = prevStep.scale(1.0 / prevLen);
+                    double continuity = prevDir.dot(stepDir);
                     turnPenalty = Math.max(0.0, 1.0 - continuity) * 2.2;
                 }
             }
 
             double score = candidateDist - (alignment * 4.35) - Math.max(0.0, offset.getY()) * 0.10 + lateralPenalty + turnPenalty + lockPenalty;
-            // Forward preference: reward straighter continuation to reduce oscillation.
             score += Math.abs(offset.getX()) * 0.015 + Math.abs(offset.getZ()) * 0.015;
             score += (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.35;
 
             if (!descendPhase) {
-                // Keep the chain airborne: prefer climbing to a cruise altitude before descending.
                 score += Math.max(0, cruiseY - candidate.getY()) * 0.22;
                 if (offset.getY() < 0) {
                     score += 2.4;
@@ -332,7 +316,6 @@ public final class TeleportPathfinder {
                     score -= Math.min(4.6, offset.getY() * 0.7);
                 }
             } else {
-                // Vertical-first descent: prefer straight-down chains before lateral adjustments.
                 score += Math.abs(candidate.getY() - goal.getY()) * 0.08;
                 double lateral = Math.abs(candidate.getX() - from.getX()) + Math.abs(candidate.getZ() - from.getZ());
                 score += lateral * 0.18;
@@ -353,13 +336,12 @@ public final class TeleportPathfinder {
 
 
         if (best == null && blockedToGoal) {
-            // Emergency climb when boxed by walls/mountains: go straight up first.
             for (int dy = 12; dy >= 6; dy--) {
-                BlockPos climb = from.up(dy);
+                BlockPos climb = from.above(dy);
                 if (seen.contains(packPos(climb))) {
                     continue;
                 }
-                if (!isPassableForPlayer(player, climb) || !isPassableForPlayer(player, climb.up())) {
+                if (!isPassableForPlayer(player, climb) || !isPassableForPlayer(player, climb.above())) {
                     continue;
                 }
                 if (teleportMode == TeleportMode.JUST_TELEPORT && !hasVerticalClearance(player, climb, JUST_TELEPORT_MIN_AIR_CLEARANCE)) {
@@ -371,10 +353,12 @@ public final class TeleportPathfinder {
                 best = climb;
                 break;
             }
-        }        return best;
+        }
+        return best;
     }
+
     private SearchResult searchOnCustomNodeGraph(
-        ClientPlayerEntity player,
+        LocalPlayer player,
         BlockPos start,
         BlockPos goal,
         int availableMana,
@@ -404,7 +388,7 @@ public final class TeleportPathfinder {
         visited.put(startPacked, first);
 
         SearchNode best = first;
-        double bestDistSq = start.getSquaredDistance(goal);
+        double bestDistSq = start.distSqr(goal);
 
         int expansions = 0;
         while (!open.isEmpty() && expansions < maxExpansions) {
@@ -418,13 +402,13 @@ public final class TeleportPathfinder {
             if (current == null) continue;
             expansions++;
 
-            double distSq = current.node.pos.getSquaredDistance(goal);
+            double distSq = current.node.pos.distSqr(goal);
             if (distSq < bestDistSq) {
                 bestDistSq = distSq;
                 best = current;
             }
 
-            if (current.node.pos.isWithinDistance(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
+            if (current.node.pos.closerThan(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
                 return new SearchResult(backtrack(current), true, 0.0);
             }
 
@@ -471,7 +455,7 @@ public final class TeleportPathfinder {
     }
 
     private Long2ObjectOpenHashMap<GraphNode> buildCustomNodeGraph(
-        ClientPlayerEntity player,
+        LocalPlayer player,
         BlockPos start,
         BlockPos goal,
         boolean includeTeleports,
@@ -482,7 +466,7 @@ public final class TeleportPathfinder {
     ) {
         Long2ObjectOpenHashMap<GraphNode> graph = new Long2ObjectOpenHashMap<>(maxNodes);
         PriorityQueue<GraphNode> queue = new PriorityQueue<>(
-            Comparator.comparingDouble((GraphNode n) -> n.pos.getSquaredDistance(goal))
+            Comparator.comparingDouble((GraphNode n) -> n.pos.distSqr(goal))
         );
         LongOpenHashSet expanded = new LongOpenHashSet(maxNodes);
 
@@ -522,7 +506,7 @@ public final class TeleportPathfinder {
             graph.put(goalPacked, goalNode);
             for (BlockPos walkOffset : WALK_OFFSETS) {
                 for (int dy = -1; dy <= 1; dy++) {
-                    BlockPos neighborPos = goal.add(walkOffset).add(0, dy, 0);
+                    BlockPos neighborPos = goal.offset(walkOffset).offset(0, dy, 0);
                     GraphNode neighborNode = graph.get(packPos(neighborPos));
                     if (neighborNode != null && isWalkTransitionValid(player, neighborPos, goal)) {
                         neighborNode.edges.add(new GraphEdge(goalNode, TeleportHop.HopType.WALK, 0, 1.35));
@@ -535,23 +519,18 @@ public final class TeleportPathfinder {
     }
 
     private boolean shouldExpandNode(BlockPos start, BlockPos goal, BlockPos candidate, boolean includeTeleports) {
-        double startToGoal = Math.sqrt(start.getSquaredDistance(goal));
-        double startToCandidate = Math.sqrt(start.getSquaredDistance(candidate));
-        double candidateToGoal = Math.sqrt(candidate.getSquaredDistance(goal));
+        double startToGoal = Math.sqrt(start.distSqr(goal));
+        double startToCandidate = Math.sqrt(start.distSqr(candidate));
+        double candidateToGoal = Math.sqrt(candidate.distSqr(goal));
         double slack = includeTeleports ? 70.0 : 50.0;
         return startToCandidate + candidateToGoal <= startToGoal + slack;
     }
 
-    private Collection<Neighbor> neighbors(ClientPlayerEntity player, BlockPos from, BlockPos start, boolean includeTeleports, boolean allowAirNormalTeleports, TeleportMode teleportMode, BlockPos goal) {
+    private Collection<Neighbor> neighbors(LocalPlayer player, BlockPos from, BlockPos start, boolean includeTeleports, boolean allowAirNormalTeleports, TeleportMode teleportMode, BlockPos goal) {
         List<Neighbor> out = new ArrayList<>(SHORT_OFFSETS.size() + LONG_OFFSETS.size() + 16);
-        double fromGoalSq = from.getSquaredDistance(goal);
-        // For the starting node use the player's actual facing; for every subsequent node
-        // the player has already flicked to aim at this position, so their effective facing
-        // is the direction they just traveled (start → from).
-        float fromYaw = from.equals(start) ? player.getYaw() : yawTo(start, from);
+        double fromGoalSq = from.distSqr(goal);
+        float fromYaw = from.equals(start) ? player.getYRot() : yawTo(start, from);
 
-        // Horizontal goal direction for straight-path bias.
-        // Only the XZ plane matters — going vertically to clear terrain is not penalised.
         double gx = goal.getX() - from.getX();
         double gz = goal.getZ() - from.getZ();
         double gHorizLen = Math.sqrt(gx * gx + gz * gz);
@@ -574,7 +553,7 @@ public final class TeleportPathfinder {
                         continue;
                     }
 
-                    BlockPos aimPoint = from.add(offset);
+                    BlockPos aimPoint = from.offset(offset);
                     float yawDelta = Math.abs(wrapDegrees(yawTo(from, aimPoint) - fromYaw));
                     if (yawDelta > WAYPOINT_MAX_YAW_DELTA_DEG) {
                         continue;
@@ -596,20 +575,16 @@ public final class TeleportPathfinder {
                     }
 
                     double gravityPenalty = Math.max(0, aimPoint.getY() - landing.getY()) * 0.03;
-                    double landingGoalSq = landing.getSquaredDistance(goal);
-                    if (landingGoalSq > fromGoalSq + 200.0 && !landing.isWithinDistance(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
+                    double landingGoalSq = landing.distSqr(goal);
+                    if (landingGoalSq > fromGoalSq + 200.0 && !landing.closerThan(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
                         continue;
                     }
                     if (!isWaypointCastStable(player, from, landing)) {
                         continue;
                     }
-                    // Reject landings squeezed into 1-block gaps or clipped inside geometry —
-                    // the player would be unable to see / reach the next waypoint from there.
                     if (!hasAdequateHorizontalClearance(player, landing)) {
                         continue;
                     }
-                    // Penalise lateral deviation from the goal direction so the planner prefers
-                    // going straight through/over obstacles rather than routing around them.
                     double hxN = landing.getX() - from.getX();
                     double hzN = landing.getZ() - from.getZ();
                     double hLenN = Math.sqrt(hxN * hxN + hzN * hzN);
@@ -629,7 +604,7 @@ public final class TeleportPathfinder {
 
             if (allowShift) {
                 for (BlockPos offset : LONG_OFFSETS) {
-                    BlockPos aimPoint = from.add(offset);
+                    BlockPos aimPoint = from.offset(offset);
                     if (!hasTeleportCorridorClear(player, from, aimPoint)) {
                         continue;
                     }
@@ -644,8 +619,8 @@ public final class TeleportPathfinder {
                     }
 
                     double gravityPenalty = Math.max(0, aimPoint.getY() - landing.getY()) * 0.03;
-                    double landingGoalSq = landing.getSquaredDistance(goal);
-                    if (landingGoalSq > fromGoalSq + 200.0 && !landing.isWithinDistance(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
+                    double landingGoalSq = landing.distSqr(goal);
+                    if (landingGoalSq > fromGoalSq + 200.0 && !landing.closerThan(goal, AotvConfig.GOAL_REACHED_RADIUS)) {
                         continue;
                     }
                     if (!isWaypointCastStable(player, from, landing)) {
@@ -668,78 +643,55 @@ public final class TeleportPathfinder {
             }
         }
 
-        // Context-aware walk cost:
-        //   • Teleport exits exist at this node → keep walk expensive (5.0) so the planner
-        //     strongly prefers teleporting whenever it is physically possible.
-        //   • No teleport exits at this node (tunnel, enclosed corridor, solid obstacle) →
-        //     drop walk cost to bridge cost (1.5) so the planner walks through the obstacle
-        //     and resumes teleporting on the other side, rather than routing a long detour around it.
-        boolean hasTeleportExits = !out.isEmpty();  // 'out' holds only teleport moves at this point
-        // 8.0 per step when teleports are reachable: 4× the per-block teleport cost so the
-        // planner strongly prefers teleporting, but a 2-3 step walk around a solid obstacle
-        // is still cheaper than a 9+ hop teleport detour.  At 15.0 the A* spent its entire
-        // expansion budget chasing long teleport detours and never found the short walk-around,
-        // causing paths to fail completely when a single block blocked all teleport directions.
-        // 1.5 per step when no teleports exist (tunnel / enclosed space) so the planner
-        // bridges through the obstacle and resumes teleporting on the far side.
+        boolean hasTeleportExits = !out.isEmpty();
         double walkTravelCost = includeTeleports
             ? (hasTeleportExits ? 8.0 : 1.5)
             : 1.35;
         for (BlockPos walkOffset : WALK_OFFSETS) {
-            BlockPos base = from.add(walkOffset);
+            BlockPos base = from.offset(walkOffset);
             for (int y = -1; y <= 1; y++) {
-                BlockPos candidate = base.add(0, y, 0);
+                BlockPos candidate = base.offset(0, y, 0);
                 if (!isWalkTransitionValid(player, from, candidate)) {
                     continue;
                 }
-                if (teleportMode == TeleportMode.JUST_TELEPORT && !candidate.isWithinDistance(goal, JUST_TELEPORT_FINAL_WALK_RADIUS)) {
+                if (teleportMode == TeleportMode.JUST_TELEPORT && !candidate.closerThan(goal, JUST_TELEPORT_FINAL_WALK_RADIUS)) {
                     continue;
                 }
                 out.add(new Neighbor(candidate, TeleportHop.HopType.WALK, 0, walkTravelCost + (y > 0 ? 0.15 : 0.0)));
             }
         }
 
-        // Jump-over walk: 2-block cardinal jump clearing a 1-block solid obstacle.
-        // Same conditions as AotvWalkPathfinder: mid has collision, two blocks above are
-        // clear for the arc, and the landing is safe at the same floor level.
         for (BlockPos jumpOffset : JUMP_OFFSETS) {
-            BlockPos dest = from.add(jumpOffset);
+            BlockPos dest = from.offset(jumpOffset);
             BlockPos mid  = new BlockPos(
                 (from.getX() + dest.getX()) / 2,
                 from.getY(),
                 (from.getZ() + dest.getZ()) / 2
             );
             if (!isChunkLoaded(player, mid) || !isChunkLoaded(player, dest)) continue;
-            if (isWalkPassable(player, mid)) continue;                            // no obstacle to jump
-            if (!isWalkPassable(player, mid.up()) || !isWalkPassable(player, mid.up(2))) continue; // arc blocked
-            if (!isWalkSafeStanding(player, dest)) continue;                      // bad landing
-            if (dest.getY() != from.getY()) continue;                             // must be same floor level
-            if (teleportMode == TeleportMode.JUST_TELEPORT && !dest.isWithinDistance(goal, JUST_TELEPORT_FINAL_WALK_RADIUS)) continue;
+            if (isWalkPassable(player, mid)) continue;
+            if (!isWalkPassable(player, mid.above()) || !isWalkPassable(player, mid.above(2))) continue;
+            if (!isWalkSafeStanding(player, dest)) continue;
+            if (dest.getY() != from.getY()) continue;
+            if (teleportMode == TeleportMode.JUST_TELEPORT && !dest.closerThan(goal, JUST_TELEPORT_FINAL_WALK_RADIUS)) continue;
             out.add(new Neighbor(dest, TeleportHop.HopType.WALK, 0, walkTravelCost * 2.0 + 0.2));
         }
 
         if (includeTeleports && teleportMode != TeleportMode.SHIFT_ONLY) {
             for (BlockPos walkOffset : WALK_OFFSETS) {
-                BlockPos edge = from.add(walkOffset);
-                // The player walks one block into the edge to reach the drop.
-                // Both feet-level (edge) and head-level (edge.up()) must be open air so
-                // the player doesn't clip into a block when stepping off the ledge.
-                if (!isPassableForPlayer(player, edge) || !isPassableForPlayer(player, edge.up()) || isSafeStanding(player, edge)) {
+                BlockPos edge = from.offset(walkOffset);
+                if (!isPassableForPlayer(player, edge) || !isPassableForPlayer(player, edge.above()) || isSafeStanding(player, edge)) {
                     continue;
                 }
 
                 for (int drop = 2; drop <= 8; drop++) {
-                    BlockPos landing = edge.down(drop);
+                    BlockPos landing = edge.below(drop);
                     if (!isSafeStanding(player, landing)) {
                         continue;
                     }
-                    // Verify every block in the falling column between the edge step and
-                    // the landing is passable.  isSafeStanding only checks landing.up()
-                    // (one above the floor); for drops ≥ 3 the intermediate blocks go
-                    // unchecked and can silently stop the player mid-fall.
                     boolean columnClear = true;
                     for (int d = 1; d < drop; d++) {
-                        if (!isPassableForPlayer(player, edge.down(d))) {
+                        if (!isPassableForPlayer(player, edge.below(d))) {
                             columnClear = false;
                             break;
                         }
@@ -757,55 +709,41 @@ public final class TeleportPathfinder {
         return out;
     }
 
-    private boolean isWaypointCastStable(ClientPlayerEntity player, BlockPos from, BlockPos landing) {
-        // Simple eye-to-target ray: player eye → centre of the landing block at torso height.
-        // The nudge/jitter variant was over-rejecting valid positions because the lateral
-        // jitter (±0.08 in X only) didn't represent the actual AOTV cast geometry.
-        Vec3d fromEye = new Vec3d(from.getX() + 0.5, from.getY() + 1.62, from.getZ() + 0.5);
-        Vec3d target  = new Vec3d(landing.getX() + 0.5, landing.getY() + 0.92, landing.getZ() + 0.5);
+    private boolean isWaypointCastStable(LocalPlayer player, BlockPos from, BlockPos landing) {
+        Vec3 fromEye = new Vec3(from.getX() + 0.5, from.getY() + 1.62, from.getZ() + 0.5);
+        Vec3 target  = new Vec3(landing.getX() + 0.5, landing.getY() + 0.92, landing.getZ() + 0.5);
         return rayClear(player, fromEye, target);
     }
 
-    /**
-     * Returns true when the teleport landing has at least 2 open cardinal neighbours at
-     * both feet and head level.  Nodes that sit in 1-block-wide gaps or slightly inside
-     * blocks fail this check and are excluded from the graph, preventing the pathfinder
-     * from building paths the player physically cannot follow.
-     */
-    private boolean hasAdequateHorizontalClearance(ClientPlayerEntity player, BlockPos pos) {
+    private boolean hasAdequateHorizontalClearance(LocalPlayer player, BlockPos pos) {
         int open = 0;
         BlockPos[] adj = {
-            pos.add(1, 0, 0), pos.add(-1, 0, 0),
-            pos.add(0, 0, 1), pos.add(0, 0, -1)
+            pos.offset(1, 0, 0), pos.offset(-1, 0, 0),
+            pos.offset(0, 0, 1), pos.offset(0, 0, -1)
         };
         for (BlockPos a : adj) {
-            if (isWalkPassable(player, a) && isWalkPassable(player, a.up())) {
+            if (isWalkPassable(player, a) && isWalkPassable(player, a.above())) {
                 open++;
             }
         }
         return open >= 2;
     }
 
-    private boolean rayClear(ClientPlayerEntity player, Vec3d start, Vec3d end) {
-        // COLLIDER-only: AOTV targeting uses collision shapes, not outline shapes.
-        // The OUTLINE check was incorrectly rejecting casts when the aim ray grazed the
-        // edge of an adjacent block (e.g. a single wall block next to the player).
-        // Grass, flowers, and other non-solid decorators have empty collision shapes and
-        // do not block AOTV, so they must not be caught here.
-        HitResult colliderHit = player.getEntityWorld().raycast(new RaycastContext(
+    private boolean rayClear(LocalPlayer player, Vec3 start, Vec3 end) {
+        HitResult colliderHit = player.level().clip(new ClipContext(
             start,
             end,
-            RaycastContext.ShapeType.COLLIDER,
-            RaycastContext.FluidHandling.NONE,
+            ClipContext.Block.COLLIDER,
+            ClipContext.Fluid.NONE,
             player
         ));
         return colliderHit.getType() == HitResult.Type.MISS;
     }
 
     private float yawTo(BlockPos from, BlockPos to) {
-        Vec3d start = new Vec3d(from.getX() + 0.5, from.getY() + 1.62, from.getZ() + 0.5);
-        Vec3d end = new Vec3d(to.getX() + 0.5, to.getY() + 0.92, to.getZ() + 0.5);
-        Vec3d d = end.subtract(start);
+        Vec3 start = new Vec3(from.getX() + 0.5, from.getY() + 1.62, from.getZ() + 0.5);
+        Vec3 end = new Vec3(to.getX() + 0.5, to.getY() + 0.92, to.getZ() + 0.5);
+        Vec3 d = end.subtract(start);
         return (float) (Math.atan2(d.z, d.x) * (180.0 / Math.PI)) - 90.0F;
     }
 
@@ -816,7 +754,7 @@ public final class TeleportPathfinder {
         return wrapped;
     }
 
-    private List<TeleportHop> smoothTeleportRoute(ClientPlayerEntity player, BlockPos start, List<TeleportHop> input) {
+    private List<TeleportHop> smoothTeleportRoute(LocalPlayer player, BlockPos start, List<TeleportHop> input) {
         if (input == null || input.size() < 3) {
             return input;
         }
@@ -826,16 +764,12 @@ public final class TeleportPathfinder {
         while (i < input.size()) {
             TeleportHop hop = input.get(i);
             if (hop.type() == TeleportHop.HopType.WALK) {
-                // ── Walk→teleport skip optimisation ──────────────────────────
-                // After bridging through an obstacle by walking, check whether we can now
-                // teleport to a position further along the walk segment. Scan backward from
-                // the furthest look-ahead so we always take the longest possible teleport skip.
                 int maxRange = AotvConfig.TRANSMISSION_RANGE;
                 int scanLimit = Math.min(input.size() - 1, i + maxRange + 6);
                 int skipTo = -1;
                 for (int j = scanLimit; j > i; j--) {
                     BlockPos dest = input.get(j).landing();
-                    double distSq = current.getSquaredDistance(dest);
+                    double distSq = current.distSqr(dest);
                     if (distSq < 16.0 || distSq > (double) (maxRange * maxRange)) {
                         continue;
                     }
@@ -855,14 +789,12 @@ public final class TeleportPathfinder {
                     i = skipTo + 1;
                     continue;
                 }
-                // No teleport available from here — take the walk step.
                 out.add(hop);
                 current = hop.landing();
                 i++;
                 continue;
             }
 
-            // Teleport hop: try to skip up to 6 redundant same-type hops ahead.
             int best = i;
             for (int j = Math.min(i + 6, input.size() - 1); j > i; j--) {
                 TeleportHop candidate = input.get(j);
@@ -902,16 +834,14 @@ public final class TeleportPathfinder {
         return out;
     }
 
-    private boolean isAirWaypointValid(ClientPlayerEntity player, BlockPos from, BlockPos pos) {
+    private boolean isAirWaypointValid(LocalPlayer player, BlockPos from, BlockPos pos) {
         if (!hasTeleportCorridorClear(player, from, pos)) {
             return false;
         }
-        return isPassableForPlayer(player, pos) && isPassableForPlayer(player, pos.up());
+        return isPassableForPlayer(player, pos) && isPassableForPlayer(player, pos.above());
     }
 
-    private BlockPos findViableLaunchPosition(ClientPlayerEntity player, BlockPos current, BlockPos teleportDest, List<TeleportHop> input, int teleportIndex) {
-        // Strategy 1: scan forward along input walk hops — the player can walk
-        // further past the cramped handoff to find open ground.
+    private BlockPos findViableLaunchPosition(LocalPlayer player, BlockPos current, BlockPos teleportDest, List<TeleportHop> input, int teleportIndex) {
         for (int j = teleportIndex - 1; j >= Math.max(0, teleportIndex - 8); j--) {
             TeleportHop h = input.get(j);
             if (h.type() != TeleportHop.HopType.WALK) break;
@@ -922,18 +852,17 @@ public final class TeleportPathfinder {
             return candidate;
         }
 
-        // Strategy 2: wide lateral search (8 directions, up to 3 blocks) around current.
         int[][] dirs = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
         BlockPos bestLateral = null;
         double bestDistSq = Double.MAX_VALUE;
         for (int dist = 1; dist <= 3; dist++) {
             for (int[] d : dirs) {
-                BlockPos candidate = current.add(d[0] * dist, 0, d[1] * dist);
+                BlockPos candidate = current.offset(d[0] * dist, 0, d[1] * dist);
                 if (!isWalkSafeStanding(player, candidate)) continue;
                 if (!hasAdequateHorizontalClearance(player, candidate)) continue;
                 if (!hasTeleportCorridorClear(player, candidate, teleportDest)) continue;
                 if (!isWaypointCastStable(player, candidate, teleportDest)) continue;
-                double dSq = candidate.getSquaredDistance(current);
+                double dSq = candidate.distSqr(current);
                 if (dSq < bestDistSq) {
                     bestDistSq = dSq;
                     bestLateral = candidate;
@@ -944,18 +873,10 @@ public final class TeleportPathfinder {
         return bestLateral;
     }
 
-    private boolean hasTeleportCorridorClear(ClientPlayerEntity player, BlockPos from, BlockPos to) {
-        // Check at upper-torso (1.05) and head (1.62) height.
-        // The 1.05 offset is slightly above the block surface (Y+1.0) so the lower ray
-        // clears small ground-level edges that previously clipped at 0.92.
+    private boolean hasTeleportCorridorClear(LocalPlayer player, BlockPos from, BlockPos to) {
         if (!isRayClear(player, from, to, 1.05)) return false;
         if (!isRayClear(player, from, to, 1.62)) return false;
 
-        // Boundary-trap detection: the player body is 0.6m wide (±0.3 from centre).
-        // A wall exactly one block away is only 0.2m from the body edge, so the
-        // centre ray passes cleanly while the real aim ray clips the wall in-game.
-        // When the landing position is adjacent to any solid block, also check two
-        // rays offset ±0.25 perpendicular to the aim direction at head height.
         if (hasAdjacentSolid(player, from)) {
             double dx = to.getX() - from.getX();
             double dz = to.getZ() - from.getZ();
@@ -963,9 +884,9 @@ public final class TeleportPathfinder {
             if (horizLen > 0.001) {
                 double px = -dz / horizLen * 0.25;
                 double pz =  dx / horizLen * 0.25;
-                Vec3d toCenter = new Vec3d(to.getX() + 0.5, to.getY() + 0.92, to.getZ() + 0.5);
-                Vec3d edgeA = new Vec3d(from.getX() + 0.5 + px, from.getY() + 1.62, from.getZ() + 0.5 + pz);
-                Vec3d edgeB = new Vec3d(from.getX() + 0.5 - px, from.getY() + 1.62, from.getZ() + 0.5 - pz);
+                Vec3 toCenter = new Vec3(to.getX() + 0.5, to.getY() + 0.92, to.getZ() + 0.5);
+                Vec3 edgeA = new Vec3(from.getX() + 0.5 + px, from.getY() + 1.62, from.getZ() + 0.5 + pz);
+                Vec3 edgeB = new Vec3(from.getX() + 0.5 - px, from.getY() + 1.62, from.getZ() + 0.5 - pz);
                 if (!rayClear(player, edgeA, toCenter)) return false;
                 if (!rayClear(player, edgeB, toCenter)) return false;
             }
@@ -973,10 +894,8 @@ public final class TeleportPathfinder {
         return true;
     }
 
-    // Returns true when any cardinal neighbour at feet or head height is a solid block,
-    // meaning the player is against a wall and boundary-trap checks are needed.
-    private boolean hasAdjacentSolid(ClientPlayerEntity player, BlockPos pos) {
-        BlockPos head = pos.up();
+    private boolean hasAdjacentSolid(LocalPlayer player, BlockPos pos) {
+        BlockPos head = pos.above();
         BlockPos[] check = {
             pos.north(), pos.south(), pos.east(), pos.west(),
             head.north(), head.south(), head.east(), head.west()
@@ -988,7 +907,7 @@ public final class TeleportPathfinder {
         return false;
     }
 
-    private List<BlockPos> buildShortWalkChain(ClientPlayerEntity player, BlockPos from, BlockPos to) {
+    private List<BlockPos> buildShortWalkChain(LocalPlayer player, BlockPos from, BlockPos to) {
         List<BlockPos> chain = new ArrayList<>();
         BlockPos cursor = from;
         for (int step = 0; step < 6; step++) {
@@ -997,8 +916,8 @@ public final class TeleportPathfinder {
             int dz = Integer.signum(to.getZ() - cursor.getZ());
 
             BlockPos[] tries = (dx != 0 && dz != 0)
-                ? new BlockPos[]{ cursor.add(dx, 0, dz), cursor.add(dx, 0, 0), cursor.add(0, 0, dz) }
-                : new BlockPos[]{ cursor.add(dx, 0, dz) };
+                ? new BlockPos[]{ cursor.offset(dx, 0, dz), cursor.offset(dx, 0, 0), cursor.offset(0, 0, dz) }
+                : new BlockPos[]{ cursor.offset(dx, 0, dz) };
 
             boolean moved = false;
             for (BlockPos next : tries) {
@@ -1017,101 +936,85 @@ public final class TeleportPathfinder {
         return chain;
     }
 
-    private boolean isRayClear(ClientPlayerEntity player, BlockPos from, BlockPos to, double yOffset) {
-        // If the destination chunk is not loaded the raycast passes through it as if it
-        // were empty air — block that case so we never target unloaded terrain.
+    private boolean isRayClear(LocalPlayer player, BlockPos from, BlockPos to, double yOffset) {
         if (!isChunkLoaded(player, to)) return false;
-        Vec3d start = new Vec3d(from.getX() + 0.5, from.getY() + yOffset, from.getZ() + 0.5);
-        Vec3d end = new Vec3d(to.getX() + 0.5, to.getY() + yOffset, to.getZ() + 0.5);
+        Vec3 start = new Vec3(from.getX() + 0.5, from.getY() + yOffset, from.getZ() + 0.5);
+        Vec3 end = new Vec3(to.getX() + 0.5, to.getY() + yOffset, to.getZ() + 0.5);
 
-        HitResult colliderHit = player.getEntityWorld().raycast(new RaycastContext(
-            start,
-            end,
-            RaycastContext.ShapeType.COLLIDER,
-            RaycastContext.FluidHandling.NONE,
-            player
+        HitResult colliderHit = player.level().clip(new ClipContext(
+            start, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player
         ));
         if (colliderHit.getType() != HitResult.Type.MISS) {
             return false;
         }
 
-        // OUTLINE catches hollow blocks (stairs, fences, glass panes) whose collision
-        // shape has gaps that COLLIDER rays slip through, but which AOTV cannot actually
-        // pass through.  Ignore OUTLINE hits very close to the source — those are blocks
-        // adjacent to the player that don't obstruct the cast — and hits very close to
-        // the destination to avoid false-positives from the landing block itself.
-        HitResult outlineHit = player.getEntityWorld().raycast(new RaycastContext(
-            start,
-            end,
-            RaycastContext.ShapeType.OUTLINE,
-            RaycastContext.FluidHandling.NONE,
-            player
+        HitResult outlineHit = player.level().clip(new ClipContext(
+            start, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player
         ));
         if (outlineHit.getType() != HitResult.Type.MISS) {
-            double hitFromStartSq = outlineHit.getPos().squaredDistanceTo(start);
-            double hitFromEndSq   = outlineHit.getPos().squaredDistanceTo(end);
-            // > 1.5 blocks from source AND > 1.0 block from destination
+            double hitFromStartSq = outlineHit.getLocation().distanceToSqr(start);
+            double hitFromEndSq   = outlineHit.getLocation().distanceToSqr(end);
             if (hitFromStartSq > 2.25 && hitFromEndSq > 1.0) {
                 return false;
             }
         }
         return true;
     }
-    private BlockPos settleByGravity(ClientPlayerEntity player, BlockPos start) {
+
+    private BlockPos settleByGravity(LocalPlayer player, BlockPos start) {
         return settleByGravityWithLimit(player, start, MAX_GRAVITY_DROP);
     }
 
-    private BlockPos settleByGravityWithLimit(ClientPlayerEntity player, BlockPos start, int maxDrop) {
+    private BlockPos settleByGravityWithLimit(LocalPlayer player, BlockPos start, int maxDrop) {
         BlockPos cursor = start;
         for (int drop = 0; drop <= maxDrop; drop++) {
             if (isSafeStanding(player, cursor)) {
                 return cursor;
             }
-            if (!isPassableForPlayer(player, cursor) || !isPassableForPlayer(player, cursor.up())) {
+            if (!isPassableForPlayer(player, cursor) || !isPassableForPlayer(player, cursor.above())) {
                 return null;
             }
-            cursor = cursor.down();
+            cursor = cursor.below();
         }
         return null;
     }
 
-    private boolean isChunkLoaded(ClientPlayerEntity player, BlockPos pos) {
-        return player.getEntityWorld().isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4);
+    private boolean isChunkLoaded(LocalPlayer player, BlockPos pos) {
+        return player.level().isLoaded(pos);
     }
 
-    private boolean isPassableForPlayer(ClientPlayerEntity player, BlockPos pos) {
-        // Unloaded chunks report every block as AIR — treat them as solid so the
-        // pathfinder never punches through terrain that the client hasn't received yet.
+    private boolean isPassableForPlayer(LocalPlayer player, BlockPos pos) {
         if (!isChunkLoaded(player, pos)) return false;
-        return player.getEntityWorld().getBlockState(pos).isAir();
+        return player.level().getBlockState(pos).isAir();
     }
 
-    private boolean isWalkPassable(ClientPlayerEntity player, BlockPos pos) {
+    private boolean isWalkPassable(LocalPlayer player, BlockPos pos) {
         if (!isChunkLoaded(player, pos)) return false;
-        return player.getEntityWorld().getBlockState(pos)
-            .getCollisionShape(player.getEntityWorld(), pos)
+        return player.level().getBlockState(pos)
+            .getCollisionShape(player.level(), pos)
             .isEmpty();
     }
 
-    private boolean isWalkSafeStanding(ClientPlayerEntity player, BlockPos pos) {
+    private boolean isWalkSafeStanding(LocalPlayer player, BlockPos pos) {
         if (!isChunkLoaded(player, pos)) return false;
-        BlockState feet = player.getEntityWorld().getBlockState(pos);
-        BlockState head = player.getEntityWorld().getBlockState(pos.up());
-        BlockState below = player.getEntityWorld().getBlockState(pos.down());
-        return feet.getCollisionShape(player.getEntityWorld(), pos).isEmpty()
-            && head.getCollisionShape(player.getEntityWorld(), pos.up()).isEmpty()
-            && below.isSolidBlock(player.getEntityWorld(), pos.down());
+        BlockState feet = player.level().getBlockState(pos);
+        BlockState head = player.level().getBlockState(pos.above());
+        BlockState below = player.level().getBlockState(pos.below());
+        return feet.getCollisionShape(player.level(), pos).isEmpty()
+            && head.getCollisionShape(player.level(), pos.above()).isEmpty()
+            && below.isSolid();
     }
-    private boolean hasVerticalClearance(ClientPlayerEntity player, BlockPos base, int requiredAirBlocks) {
+
+    private boolean hasVerticalClearance(LocalPlayer player, BlockPos base, int requiredAirBlocks) {
         for (int i = 0; i < requiredAirBlocks; i++) {
-            if (!isPassableForPlayer(player, base.up(i))) {
+            if (!isPassableForPlayer(player, base.above(i))) {
                 return false;
             }
         }
         return true;
     }
 
-    private boolean isWalkTransitionValid(ClientPlayerEntity player, BlockPos from, BlockPos to) {
+    private boolean isWalkTransitionValid(LocalPlayer player, BlockPos from, BlockPos to) {
         if (!isWalkSafeStanding(player, to)) {
             return false;
         }
@@ -1124,7 +1027,7 @@ public final class TeleportPathfinder {
         }
 
         if (dy > 0) {
-            if (!player.getEntityWorld().getBlockState(from.up(2)).isAir()) {
+            if (!player.level().getBlockState(from.above(2)).isAir()) {
                 return false;
             }
             if (!hasJumpArcClear(player, from, to)) {
@@ -1133,10 +1036,10 @@ public final class TeleportPathfinder {
         }
 
         if (dx != 0 && dz != 0) {
-            BlockPos sideX = from.add(dx, 0, 0);
-            BlockPos sideZ = from.add(0, 0, dz);
-            boolean sideXClear = isWalkPassable(player, sideX) && isWalkPassable(player, sideX.up());
-            boolean sideZClear = isWalkPassable(player, sideZ) && isWalkPassable(player, sideZ.up());
+            BlockPos sideX = from.offset(dx, 0, 0);
+            BlockPos sideZ = from.offset(0, 0, dz);
+            boolean sideXClear = isWalkPassable(player, sideX) && isWalkPassable(player, sideX.above());
+            boolean sideZClear = isWalkPassable(player, sideZ) && isWalkPassable(player, sideZ.above());
 
             if (dy > 0) {
                 if (!sideXClear && !sideZClear) {
@@ -1152,65 +1055,49 @@ public final class TeleportPathfinder {
         return hasWalkCorridorClear(player, from, to);
     }
 
-    private boolean hasWalkCorridorClear(ClientPlayerEntity player, BlockPos from, BlockPos to) {
-        Vec3d fromFeet = Vec3d.ofCenter(from).add(0.0, 0.05, 0.0);
-        Vec3d toFeet = Vec3d.ofCenter(to).add(0.0, 0.05, 0.0);
-        Vec3d fromHead = Vec3d.ofCenter(from).add(0.0, 1.05, 0.0);
-        Vec3d toHead = Vec3d.ofCenter(to).add(0.0, 1.05, 0.0);
+    private boolean hasWalkCorridorClear(LocalPlayer player, BlockPos from, BlockPos to) {
+        Vec3 fromFeet = Vec3.atCenterOf(from).add(0.0, 0.05, 0.0);
+        Vec3 toFeet = Vec3.atCenterOf(to).add(0.0, 0.05, 0.0);
+        Vec3 fromHead = Vec3.atCenterOf(from).add(0.0, 1.05, 0.0);
+        Vec3 toHead = Vec3.atCenterOf(to).add(0.0, 1.05, 0.0);
 
-        HitResult feetHit = player.getEntityWorld().raycast(new RaycastContext(
-            fromFeet,
-            toFeet,
-            RaycastContext.ShapeType.COLLIDER,
-            RaycastContext.FluidHandling.NONE,
-            player
+        HitResult feetHit = player.level().clip(new ClipContext(
+            fromFeet, toFeet, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player
         ));
         if (feetHit.getType() != HitResult.Type.MISS) {
             return false;
         }
 
-        HitResult headHit = player.getEntityWorld().raycast(new RaycastContext(
-            fromHead,
-            toHead,
-            RaycastContext.ShapeType.COLLIDER,
-            RaycastContext.FluidHandling.NONE,
-            player
+        HitResult headHit = player.level().clip(new ClipContext(
+            fromHead, toHead, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player
         ));
         return headHit.getType() == HitResult.Type.MISS;
     }
 
-    private boolean hasJumpArcClear(ClientPlayerEntity player, BlockPos from, BlockPos to) {
-        Vec3d upStart = Vec3d.ofCenter(from).add(0.0, 0.05, 0.0);
-        Vec3d upEnd = upStart.add(0.0, 1.0, 0.0);
-        HitResult vertical = player.getEntityWorld().raycast(new RaycastContext(
-            upStart,
-            upEnd,
-            RaycastContext.ShapeType.COLLIDER,
-            RaycastContext.FluidHandling.NONE,
-            player
+    private boolean hasJumpArcClear(LocalPlayer player, BlockPos from, BlockPos to) {
+        Vec3 upStart = Vec3.atCenterOf(from).add(0.0, 0.05, 0.0);
+        Vec3 upEnd = upStart.add(0.0, 1.0, 0.0);
+        HitResult vertical = player.level().clip(new ClipContext(
+            upStart, upEnd, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player
         ));
         if (vertical.getType() != HitResult.Type.MISS) {
             return false;
         }
 
-        Vec3d hStart = Vec3d.ofCenter(from).add(0.0, 1.05, 0.0);
-        Vec3d hEnd = Vec3d.ofCenter(to).add(0.0, 1.05, 0.0);
-        HitResult horizontal = player.getEntityWorld().raycast(new RaycastContext(
-            hStart,
-            hEnd,
-            RaycastContext.ShapeType.COLLIDER,
-            RaycastContext.FluidHandling.NONE,
-            player
+        Vec3 hStart = Vec3.atCenterOf(from).add(0.0, 1.05, 0.0);
+        Vec3 hEnd = Vec3.atCenterOf(to).add(0.0, 1.05, 0.0);
+        HitResult horizontal = player.level().clip(new ClipContext(
+            hStart, hEnd, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player
         ));
         return horizontal.getType() == HitResult.Type.MISS;
     }
 
-    private boolean isSafeStanding(ClientPlayerEntity player, BlockPos pos) {
+    private boolean isSafeStanding(LocalPlayer player, BlockPos pos) {
         if (!isChunkLoaded(player, pos)) return false;
-        BlockState feet = player.getEntityWorld().getBlockState(pos);
-        BlockState head = player.getEntityWorld().getBlockState(pos.up());
-        BlockState below = player.getEntityWorld().getBlockState(pos.down());
-        return feet.isAir() && head.isAir() && below.isSolidBlock(player.getEntityWorld(), pos.down());
+        BlockState feet = player.level().getBlockState(pos);
+        BlockState head = player.level().getBlockState(pos.above());
+        BlockState below = player.level().getBlockState(pos.below());
+        return feet.isAir() && head.isAir() && below.isSolid();
     }
 
     private double heuristicWithStart(BlockPos current, BlockPos goal, BlockPos start) {
@@ -1251,7 +1138,7 @@ public final class TeleportPathfinder {
         return reversed;
     }
 
-    private SearchResult searchPureWalk(ClientPlayerEntity player, BlockPos start, BlockPos goal, int maxExpansions) {
+    private SearchResult searchPureWalk(LocalPlayer player, BlockPos start, BlockPos goal, int maxExpansions) {
         AotvWalkPathfinder.Result walk = walkPathfinder.findPath(
             player,
             start,
@@ -1298,8 +1185,6 @@ public final class TeleportPathfinder {
                 }
             }
         }
-        // Evaluate closer offsets first so expensive corridor checks on far
-        // candidates are skipped when a nearer valid hop is already found.
         out.sort(Comparator.comparingInt(p -> p.getX() * p.getX() + p.getY() * p.getY() + p.getZ() * p.getZ()));
         return out;
     }
@@ -1325,10 +1210,10 @@ public final class TeleportPathfinder {
                 double cy = Math.cos(yaw);
                 double sy = Math.sin(yaw);
 
-                Vec3d unit = new Vec3d(-sy * cp, -sp, cy * cp);
+                Vec3 unit = new Vec3(-sy * cp, -sp, cy * cp);
                 for (int distance : distances) {
-                    BlockPos offset = BlockPos.ofFloored(unit.multiply(distance));
-                    if (offset.getManhattanDistance(BlockPos.ORIGIN) < AotvConfig.TRANSMISSION_RANGE + 2) {
+                    BlockPos offset = BlockPos.containing(unit.scale(distance));
+                    if (offset.distManhattan(BlockPos.ZERO) < AotvConfig.TRANSMISSION_RANGE + 2) {
                         continue;
                     }
                     out.add(offset);
@@ -1395,35 +1280,3 @@ public final class TeleportPathfinder {
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

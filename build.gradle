@@ -30,8 +30,11 @@ dependencies {
 java {
     sourceCompatibility = JavaVersion.toVersion(project.java_version)
     targetCompatibility = JavaVersion.toVersion(project.java_version)
-    withSourcesJar()
 }
+
+// The identity-mappings jar has no intermediary namespace, so source remapping fails.
+// The compiled jar is not affected; disable the sources remap task.
+tasks.matching { it.name == 'remapSourcesJar' }.configureEach { enabled = false }
 
 tasks.withType(JavaCompile).configureEach {
     it.options.encoding = 'UTF-8'

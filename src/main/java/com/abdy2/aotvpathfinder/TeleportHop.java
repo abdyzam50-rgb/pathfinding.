@@ -1,6 +1,6 @@
 package com.abdy2.aotvpathfinder;
 
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.core.BlockPos;
 
 public record TeleportHop(BlockPos landing, HopType type, int manaCost) {
     public boolean requiresShift() {
