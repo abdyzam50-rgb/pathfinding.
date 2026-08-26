@@ -4,10 +4,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.PriorityQueue;
-import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -54,15 +52,6 @@ public final class TeleportPathfinder {
     };
 
     private final AotvWalkPathfinder walkPathfinder = new AotvWalkPathfinder();
-
-    public record CandidatePath(
-        List<TeleportHop> hops,
-        MovementMode movementMode,
-        TeleportMode teleportMode,
-        boolean airChainEnabled,
-        boolean reachedGoal,
-        double bestDistanceSq
-    ) {}
 
     public List<TeleportHop> findPath(
         ClientPlayerEntity player,
@@ -144,94 +133,6 @@ public final class TeleportPathfinder {
         return smoothTeleportRoute(player, start, bestFailed.hops());
     }
 
-
-    public List<CandidatePath> enumerateCandidatePaths(
-        ClientPlayerEntity player,
-        BlockPos start,
-        BlockPos goal,
-        int availableMana,
-        int maxPaths,
-        int maxExpansions
-    ) {
-        List<CandidatePath> out = new ArrayList<>();
-        Set<String> unique = new HashSet<>();
-
-        MovementMode[] movementModes = new MovementMode[] {
-            MovementMode.HYBRID,
-            MovementMode.WALK_ONLY,
-            MovementMode.TELEPORT_ONLY
-        };
-        TeleportMode[] teleportModes = new TeleportMode[] {
-            TeleportMode.HYBRID_TELEPORT,
-            TeleportMode.SHIFT_ONLY,
-            TeleportMode.JUST_TELEPORT
-        };
-        boolean[] airOptions = new boolean[] { false, true };
-
-        int manaBase = availableMana > 0 ? availableMana : 4000;
-        int[] manaVariants = new int[] {
-            manaBase,
-            (int) (manaBase * 0.75),
-            (int) (manaBase * 0.5),
-            (int) (manaBase * 0.25),
-            -1
-        };
-
-        int attempts = 0;
-        int maxAttempts = Math.max(18, Math.min(48, maxPaths * 2));
-
-        for (MovementMode movementMode : movementModes) {
-            for (TeleportMode teleportMode : teleportModes) {
-                for (boolean airChain : airOptions) {
-                    if (airChain && teleportMode == TeleportMode.SHIFT_ONLY) {
-                        continue;
-                    }
-                    for (int mana : manaVariants) {
-                        if (attempts++ >= maxAttempts) {
-                            return out;
-                        }
-                        List<TeleportHop> hops = findPath(player, start, goal, mana, movementMode, teleportMode, airChain);
-                        if (hops.isEmpty()) {
-                            continue;
-                        }
-
-                        String sig = pathSignature(hops);
-                        if (!unique.add(sig)) {
-                            continue;
-                        }
-
-                        boolean reachedGoal = pathReachesGoal(start, hops, goal);
-                        BlockPos end = hops.get(hops.size() - 1).landing();
-                        double bestDistanceSq = end.getSquaredDistance(goal);
-                        out.add(new CandidatePath(hops, movementMode, teleportMode, airChain, reachedGoal, bestDistanceSq));
-
-                        if (out.size() >= Math.max(1, maxPaths)) {
-                            return out;
-                        }
-                    }
-                }
-            }
-        }
-
-        return out;
-    }
-
-    private boolean pathReachesGoal(BlockPos start, List<TeleportHop> hops, BlockPos goal) {
-        BlockPos end = hops.isEmpty() ? start : hops.get(hops.size() - 1).landing();
-        return end.isWithinDistance(goal, AotvConfig.GOAL_REACHED_RADIUS);
-    }
-
-    private String pathSignature(List<TeleportHop> hops) {
-        StringBuilder sb = new StringBuilder(hops.size() * 16);
-        for (TeleportHop hop : hops) {
-            BlockPos p = hop.landing();
-            sb.append(hop.type().name()).append(':')
-                .append(p.getX()).append(',')
-                .append(p.getY()).append(',')
-                .append(p.getZ()).append(';');
-        }
-        return sb.toString();
-    }
     private SearchResult searchDirectAirChain(
         ClientPlayerEntity player,
         BlockPos start,
