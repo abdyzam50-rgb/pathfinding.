@@ -1,4 +1,4 @@
-package com.abdy2.aotvpathfinder;
+package com.abdy2.aotvpathfinder.path;
 
 import com.abdy2.aotvpathfinder.ability.CastRules;
 import com.abdy2.aotvpathfinder.path.HopType;
@@ -22,7 +22,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.level.ClipContext;
 
-public final class TeleportPathfinder {
+public final class PathBuilder {
     public enum MovementMode {
         HYBRID,
         WALK_ONLY,
@@ -54,7 +54,7 @@ public final class TeleportPathfinder {
         new BlockPos(0, 0, 2), new BlockPos(0, 0, -2)
     };
 
-    private final AotvWalkPathfinder walkPathfinder = new AotvWalkPathfinder();
+    private final WalkPathBuilder walkPathfinder = new WalkPathBuilder();
 
     public List<PathHop> findPath(
         LocalPlayer player,
@@ -714,9 +714,10 @@ public final class TeleportPathfinder {
     }
 
     private boolean isWaypointCastStable(LocalPlayer player, BlockPos from, BlockPos landing) {
-        Vec3 fromEye = new Vec3(from.getX() + 0.5, from.getY() + 1.62, from.getZ() + 0.5);
-        Vec3 target  = new Vec3(landing.getX() + 0.5, landing.getY() + 0.92, landing.getZ() + 0.5);
-        return rayClear(player, fromEye, target);
+        // Same eye and same aim point the executor will use, so a waypoint judged stable here is
+        // stable there too.
+        Vec3 fromEye = CastRules.eyeIn(from);
+        return rayClear(player, fromEye, CastRules.aimPoint(landing, fromEye));
     }
 
     private boolean hasAdequateHorizontalClearance(LocalPlayer player, BlockPos pos) {
@@ -738,9 +739,8 @@ public final class TeleportPathfinder {
     }
 
     private float yawTo(BlockPos from, BlockPos to) {
-        Vec3 start = new Vec3(from.getX() + 0.5, from.getY() + 1.62, from.getZ() + 0.5);
-        Vec3 end = new Vec3(to.getX() + 0.5, to.getY() + 0.92, to.getZ() + 0.5);
-        Vec3 d = end.subtract(start);
+        Vec3 start = CastRules.eyeIn(from);
+        Vec3 d = CastRules.aimPoint(to, start).subtract(start);
         return (float) (Math.atan2(d.z, d.x) * (180.0 / Math.PI)) - 90.0F;
     }
 
@@ -1125,7 +1125,7 @@ public final class TeleportPathfinder {
     }
 
     private SearchResult searchPureWalk(LocalPlayer player, BlockPos start, BlockPos goal, int maxExpansions) {
-        AotvWalkPathfinder.Result walk = walkPathfinder.findPath(
+        WalkPathBuilder.Result walk = walkPathfinder.findPath(
             player,
             start,
             goal,
@@ -1134,7 +1134,7 @@ public final class TeleportPathfinder {
         );
 
         List<PathHop> hops = new ArrayList<>(walk.path().size());
-        for (WalkPathNode node : walk.path()) {
+        for (WalkNode node : walk.path()) {
             hops.add(PathHop.of(node.pos, HopType.WALK, 0));
         }
 

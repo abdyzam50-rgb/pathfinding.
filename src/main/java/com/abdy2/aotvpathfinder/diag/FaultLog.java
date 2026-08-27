@@ -1,4 +1,4 @@
-package com.abdy2.aotvpathfinder;
+package com.abdy2.aotvpathfinder.diag;
 
 import com.abdy2.aotvpathfinder.ability.CastRules;
 import com.abdy2.aotvpathfinder.path.HopType;
@@ -35,7 +35,7 @@ import net.minecraft.world.phys.Vec3;
  * The point is that a report can be read straight out of the file, or pasted somewhere, without
  * needing the code open beside it to decode a dense single line.
  */
-public final class AotvFaultLog {
+public final class FaultLog {
     private static final String DIR_NAME = "aotv-faults";
     private static final DateTimeFormatter FILE_STAMP =
         DateTimeFormatter.ofPattern("yyyy-MM-dd_HH.mm.ss", Locale.ROOT);
@@ -50,13 +50,13 @@ public final class AotvFaultLog {
     private boolean headerWritten;
     private int faultCount;
 
-    private AotvFaultLog(Path file) {
+    private FaultLog(Path file) {
         this.file = file;
     }
 
-    public static AotvFaultLog create(Path runDir) {
+    public static FaultLog create(Path runDir) {
         String name = "aotv-faults-" + LocalDateTime.now().format(FILE_STAMP) + ".txt";
-        return new AotvFaultLog(runDir.resolve(DIR_NAME).resolve(name));
+        return new FaultLog(runDir.resolve(DIR_NAME).resolve(name));
     }
 
     public Path file() {

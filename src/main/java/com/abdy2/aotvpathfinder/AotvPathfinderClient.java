@@ -1,5 +1,10 @@
 package com.abdy2.aotvpathfinder;
 
+import com.abdy2.aotvpathfinder.config.PathfinderSettings;
+import com.abdy2.aotvpathfinder.diag.FaultLog;
+import com.abdy2.aotvpathfinder.diag.ManaTracker;
+import com.abdy2.aotvpathfinder.path.PathBuilder;
+
 import com.abdy2.aotvpathfinder.ability.CastRules;
 import com.abdy2.aotvpathfinder.path.HopType;
 import com.abdy2.aotvpathfinder.path.PathHop;
@@ -59,10 +64,10 @@ public class AotvPathfinderClient implements ClientModInitializer {
     private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
         Identifier.fromNamespaceAndPath("aotvpathfinder", "general"));
 
-    private final HypixelManaTracker manaTracker = new HypixelManaTracker();
-    private final TeleportPathfinder pathfinder = new TeleportPathfinder();
-    private AotvFaultLog faultLog;
-    private AotvClientSettings settings;
+    private final ManaTracker manaTracker = new ManaTracker();
+    private final PathBuilder pathfinder = new PathBuilder();
+    private FaultLog faultLog;
+    private PathfinderSettings settings;
 
     private KeyMapping setTargetKey;
     private KeyMapping buildPathKey;
@@ -168,8 +173,8 @@ public class AotvPathfinderClient implements ClientModInitializer {
         autoRunToggleKey = registerKey("toggle_auto", GLFW.GLFW_KEY_APOSTROPHE);
         liveAiToggleKey = registerKey("toggle_live_ai", GLFW.GLFW_KEY_O);
 
-        settings = AotvClientSettings.load(Minecraft.getInstance().gameDirectory.toPath());
-        faultLog = AotvFaultLog.create(Minecraft.getInstance().gameDirectory.toPath());
+        settings = PathfinderSettings.load(Minecraft.getInstance().gameDirectory.toPath());
+        faultLog = FaultLog.create(Minecraft.getInstance().gameDirectory.toPath());
 
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> manaTracker.acceptActionBar(message.getString()));
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
@@ -207,14 +212,14 @@ public class AotvPathfinderClient implements ClientModInitializer {
             dispatcher.register(
                 literal("aotv")
                     .then(literal("mode")
-                        .then(literal("hybrid").executes(ctx -> setModeCommand(TeleportPathfinder.MovementMode.HYBRID)))
-                        .then(literal("walk").executes(ctx -> setModeCommand(TeleportPathfinder.MovementMode.WALK_ONLY)))
-                        .then(literal("teleport").executes(ctx -> setModeCommand(TeleportPathfinder.MovementMode.TELEPORT_ONLY)))
+                        .then(literal("hybrid").executes(ctx -> setModeCommand(PathBuilder.MovementMode.HYBRID)))
+                        .then(literal("walk").executes(ctx -> setModeCommand(PathBuilder.MovementMode.WALK_ONLY)))
+                        .then(literal("teleport").executes(ctx -> setModeCommand(PathBuilder.MovementMode.TELEPORT_ONLY)))
                     )
                     .then(literal("tpmode")
-                        .then(literal("shift").executes(ctx -> setTeleportModeCommand(TeleportPathfinder.TeleportMode.SHIFT_ONLY)))
-                        .then(literal("hybrid").executes(ctx -> setTeleportModeCommand(TeleportPathfinder.TeleportMode.HYBRID_TELEPORT)))
-                        .then(literal("just").executes(ctx -> setTeleportModeCommand(TeleportPathfinder.TeleportMode.JUST_TELEPORT)))
+                        .then(literal("shift").executes(ctx -> setTeleportModeCommand(PathBuilder.TeleportMode.SHIFT_ONLY)))
+                        .then(literal("hybrid").executes(ctx -> setTeleportModeCommand(PathBuilder.TeleportMode.HYBRID_TELEPORT)))
+                        .then(literal("just").executes(ctx -> setTeleportModeCommand(PathBuilder.TeleportMode.JUST_TELEPORT)))
                     )
                     .then(literal("airchain")
                         .then(literal("on").executes(ctx -> setAirChainCommand(true)))
@@ -374,7 +379,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return 1;
     }
 
-    private int setModeCommand(TeleportPathfinder.MovementMode mode) {
+    private int setModeCommand(PathBuilder.MovementMode mode) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -384,7 +389,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return 1;
     }
 
-    private int setTeleportModeCommand(TeleportPathfinder.TeleportMode mode) {
+    private int setTeleportModeCommand(PathBuilder.TeleportMode mode) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -875,7 +880,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
     private Vec3 aimTargetForHop(LocalPlayer player, PathHop hop) {
         // Teleport-only routing deliberately aims a block higher, to clear ledges on the way in.
-        if (settings.teleportMode() == TeleportPathfinder.TeleportMode.JUST_TELEPORT
+        if (settings.teleportMode() == PathBuilder.TeleportMode.JUST_TELEPORT
                 && hop.type() == HopType.NORMAL) {
             BlockPos above = hop.landing().above();
             if (player.level().getBlockState(above).isAir()) {
@@ -1271,7 +1276,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
                 }
             }
 
-            faultLog.record(new AotvFaultLog.Fault(
+            faultLog.record(new FaultLog.Fault(
                 reason,
                 rebuildAttempts + 1,
                 MAX_CONSECUTIVE_REBUILDS,
@@ -1522,11 +1527,11 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return NORMAL_NODE_SHAPE;
     }
 
-    private String teleportModeLabel(TeleportPathfinder.TeleportMode mode) {
-        if (mode == TeleportPathfinder.TeleportMode.SHIFT_ONLY) {
+    private String teleportModeLabel(PathBuilder.TeleportMode mode) {
+        if (mode == PathBuilder.TeleportMode.SHIFT_ONLY) {
             return "shift-only";
         }
-        if (mode == TeleportPathfinder.TeleportMode.JUST_TELEPORT) {
+        if (mode == PathBuilder.TeleportMode.JUST_TELEPORT) {
             return "just-teleport";
         }
         return "hybrid-teleport";

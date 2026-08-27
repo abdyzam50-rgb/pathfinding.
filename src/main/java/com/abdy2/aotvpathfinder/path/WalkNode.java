@@ -1,9 +1,9 @@
-package com.abdy2.aotvpathfinder;
+package com.abdy2.aotvpathfinder.path;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
 
-final class WalkPathNode {
+final class WalkNode {
     enum Type {
         WALK,
         JUMP,
@@ -15,11 +15,11 @@ final class WalkPathNode {
 
     final BlockPos pos;
     final Vec3 precisePos;
-    WalkPathNode parent;
+    WalkNode parent;
     final Type type;
     double gCost;
 
-    WalkPathNode(BlockPos pos, Vec3 precisePos, WalkPathNode parent, Type type) {
+    WalkNode(BlockPos pos, Vec3 precisePos, WalkNode parent, Type type) {
         this.pos = pos;
         this.precisePos = (precisePos != null) ? precisePos
                 : new Vec3(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);

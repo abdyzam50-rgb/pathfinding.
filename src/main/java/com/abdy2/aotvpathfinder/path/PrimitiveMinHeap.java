@@ -1,4 +1,4 @@
-package com.abdy2.aotvpathfinder;
+package com.abdy2.aotvpathfinder.path;
 
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 

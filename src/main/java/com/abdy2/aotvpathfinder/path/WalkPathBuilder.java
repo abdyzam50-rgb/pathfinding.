@@ -1,4 +1,4 @@
-package com.abdy2.aotvpathfinder;
+package com.abdy2.aotvpathfinder.path;
 
 import java.util.*;
 
@@ -14,7 +14,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.world.level.Level;
 
-final class AotvWalkPathfinder {
+final class WalkPathBuilder {
 
     private static final int    MAX_FALL_BLOCKS       = 4;
     private static final int    MAX_SPRINT_JUMP        = 4;
@@ -32,26 +32,26 @@ final class AotvWalkPathfinder {
         Level world = player.level();
         start = resolveValidStart(world, start);
 
-        PriorityQueue<WalkPathNode> open = new PriorityQueue<>(
+        PriorityQueue<WalkNode> open = new PriorityQueue<>(
             Comparator.comparingDouble(n -> n.gCost + heuristic(n.pos, goal)));
-        Map<BlockPos, WalkPathNode> openMap = new HashMap<>();
+        Map<BlockPos, WalkNode> openMap = new HashMap<>();
         Set<BlockPos> closed = new HashSet<>();
 
-        WalkPathNode startNode = new WalkPathNode(start,
+        WalkNode startNode = new WalkNode(start,
             new Vec3(start.getX() + 0.5, start.getY(), start.getZ() + 0.5),
-            null, WalkPathNode.Type.WALK);
+            null, WalkNode.Type.WALK);
         open.add(startNode);
         openMap.put(start, startNode);
 
-        WalkPathNode bestFallback = startNode;
+        WalkNode bestFallback = startNode;
         double bestFallbackH = heuristic(start, goal);
         double radiusSq = goalRadius * goalRadius;
         int expanded = 0;
-        WalkPathNode found = null;
+        WalkNode found = null;
 
         while (!open.isEmpty() && expanded < maxIterations) {
-            WalkPathNode current = open.poll();
-            WalkPathNode canon = openMap.get(current.pos);
+            WalkNode current = open.poll();
+            WalkNode canon = openMap.get(current.pos);
             if (canon != null && current.gCost > canon.gCost + 1e-9) continue;
             openMap.remove(current.pos);
             closed.add(current.pos);
@@ -68,15 +68,15 @@ final class AotvWalkPathfinder {
                 break;
             }
 
-            for (WalkPathNode raw : getNeighbors(world, current, start, goal)) {
+            for (WalkNode raw : getNeighbors(world, current, start, goal)) {
                 if (closed.contains(raw.pos)) continue;
 
                 double newG = current.gCost + moveCost(current, raw);
 
-                WalkPathNode effParent = current;
+                WalkNode effParent = current;
                 if (current.parent != null
-                        && raw.type == WalkPathNode.Type.WALK
-                        && current.type == WalkPathNode.Type.WALK
+                        && raw.type == WalkNode.Type.WALK
+                        && current.type == WalkNode.Type.WALK
                         && raw.pos.getY() == current.parent.pos.getY()
                         && isPathClear(world, current.parent.pos, raw.pos, start, goal)) {
                     int tdx = raw.pos.getX() - current.parent.pos.getX();
@@ -89,14 +89,14 @@ final class AotvWalkPathfinder {
                     }
                 }
 
-                WalkPathNode neighbor;
+                WalkNode neighbor;
                 if (effParent == current) {
                     neighbor = raw;
                 } else {
-                    neighbor = new WalkPathNode(raw.pos, raw.precisePos, effParent, raw.type);
+                    neighbor = new WalkNode(raw.pos, raw.precisePos, effParent, raw.type);
                 }
 
-                WalkPathNode existing = openMap.get(neighbor.pos);
+                WalkNode existing = openMap.get(neighbor.pos);
                 if (existing == null || newG < existing.gCost - 1e-9) {
                     neighbor.gCost = newG;
                     neighbor.parent = effParent;
@@ -107,7 +107,7 @@ final class AotvWalkPathfinder {
         }
 
         if (found != null) {
-            List<WalkPathNode> path = buildPath(found);
+            List<WalkNode> path = buildPath(found);
             path = markEdgeNodes(path);
             path = simplifyPath(world, path, start, goal);
             path = smoothPrecisePositions(path);
@@ -115,16 +115,16 @@ final class AotvWalkPathfinder {
             return new Result(path, true, 0.0);
         }
 
-        List<WalkPathNode> partial = buildPath(bestFallback);
+        List<WalkNode> partial = buildPath(bestFallback);
         double dx = bestFallback.pos.getX() - goal.getX();
         double dy = bestFallback.pos.getY() - goal.getY();
         double dz = bestFallback.pos.getZ() - goal.getZ();
         return new Result(partial, false, dx * dx + dy * dy + dz * dz);
     }
 
-    private List<WalkPathNode> getNeighbors(Level world, WalkPathNode current,
+    private List<WalkNode> getNeighbors(Level world, WalkNode current,
                                             BlockPos pathStart, BlockPos pathEnd) {
-        List<WalkPathNode> out = new ArrayList<>();
+        List<WalkNode> out = new ArrayList<>();
         BlockPos pos = current.pos;
 
         for (int[] dir : DIRS) {
@@ -133,24 +133,24 @@ final class AotvWalkPathfinder {
 
         BlockPos climbUp = pos.above();
         if (canClimbTo(world, pos, climbUp, pathStart, pathEnd)) {
-            out.add(new WalkPathNode(climbUp,
+            out.add(new WalkNode(climbUp,
                 new Vec3(pos.getX() + 0.5, climbUp.getY(), pos.getZ() + 0.5),
-                current, WalkPathNode.Type.CLIMB));
+                current, WalkNode.Type.CLIMB));
         }
 
         BlockPos climbDown = pos.below();
         if (canClimbDown(world, pos, climbDown, pathStart, pathEnd)) {
-            out.add(new WalkPathNode(climbDown,
+            out.add(new WalkNode(climbDown,
                 new Vec3(pos.getX() + 0.5, climbDown.getY(), pos.getZ() + 0.5),
-                current, WalkPathNode.Type.CLIMB));
+                current, WalkNode.Type.CLIMB));
         }
 
         return out;
     }
 
-    private void addHorizontalOptions(Level world, WalkPathNode current, int dx, int dz,
+    private void addHorizontalOptions(Level world, WalkNode current, int dx, int dz,
                                       BlockPos pathStart, BlockPos pathEnd,
-                                      List<WalkPathNode> out) {
+                                      List<WalkNode> out) {
         BlockPos from = current.pos;
         boolean diagonal = (dx != 0 && dz != 0);
         BlockPos target = from.offset(dx, 0, dz);
@@ -158,24 +158,24 @@ final class AotvWalkPathfinder {
         if (diagonal && !canCutCorner(world, from, dx, dz, pathStart, pathEnd)) return;
 
         if (canWalkTo(world, from, target, pathStart, pathEnd)) {
-            out.add(new WalkPathNode(target,
+            out.add(new WalkNode(target,
                 new Vec3(target.getX() + 0.5, target.getY(), target.getZ() + 0.5),
-                current, WalkPathNode.Type.WALK));
+                current, WalkNode.Type.WALK));
         }
 
         BlockPos jumpLanding = target.above();
         if (canJumpTo(world, from, target, jumpLanding, pathStart, pathEnd)) {
-            out.add(new WalkPathNode(jumpLanding,
+            out.add(new WalkNode(jumpLanding,
                 new Vec3(target.getX() + 0.5, jumpLanding.getY(), target.getZ() + 0.5),
-                current, WalkPathNode.Type.JUMP));
+                current, WalkNode.Type.JUMP));
         }
 
         if (!diagonal) {
             BlockPos landing = findDropLanding(world, from, target, pathStart, pathEnd);
             if (landing != null) {
-                out.add(new WalkPathNode(landing,
+                out.add(new WalkNode(landing,
                     new Vec3(landing.getX() + 0.5, landing.getY(), landing.getZ() + 0.5),
-                    current, WalkPathNode.Type.DROP));
+                    current, WalkNode.Type.DROP));
             }
         }
 
@@ -183,9 +183,9 @@ final class AotvWalkPathfinder {
             for (int dist = 2; dist <= MAX_SPRINT_JUMP; dist++) {
                 if (canSprintJumpTo(world, from, dx, dz, dist, pathStart, pathEnd)) {
                     BlockPos land = from.offset(dx * dist, 0, dz * dist);
-                    out.add(new WalkPathNode(land,
+                    out.add(new WalkNode(land,
                         new Vec3(land.getX() + 0.5, land.getY(), land.getZ() + 0.5),
-                        current, WalkPathNode.Type.SPRINT_JUMP));
+                        current, WalkNode.Type.SPRINT_JUMP));
                     break;
                 }
             }
@@ -193,9 +193,9 @@ final class AotvWalkPathfinder {
             for (int dist = 1; dist <= 2; dist++) {
                 if (canSprintJumpUphill(world, from, dx, dz, dist, pathStart, pathEnd)) {
                     BlockPos land = from.offset(dx * dist, 1, dz * dist);
-                    out.add(new WalkPathNode(land,
+                    out.add(new WalkNode(land,
                         new Vec3(land.getX() + 0.5, land.getY(), land.getZ() + 0.5),
-                        current, WalkPathNode.Type.SPRINT_JUMP));
+                        current, WalkNode.Type.SPRINT_JUMP));
                     break;
                 }
             }
@@ -203,9 +203,9 @@ final class AotvWalkPathfinder {
             for (int dist = 1; dist <= 3; dist++) {
                 if (canSprintJumpDownhill(world, from, dx, dz, dist, pathStart, pathEnd)) {
                     BlockPos land = from.offset(dx * dist, -1, dz * dist);
-                    out.add(new WalkPathNode(land,
+                    out.add(new WalkNode(land,
                         new Vec3(land.getX() + 0.5, land.getY(), land.getZ() + 0.5),
-                        current, WalkPathNode.Type.SPRINT_JUMP));
+                        current, WalkNode.Type.SPRINT_JUMP));
                     break;
                 }
             }
@@ -519,7 +519,7 @@ final class AotvWalkPathfinder {
         return base * (1.0 + (JITTER.nextDouble() - 0.5) * 0.02);
     }
 
-    private static double moveCost(WalkPathNode from, WalkPathNode to) {
+    private static double moveCost(WalkNode from, WalkNode to) {
         double dx    = to.pos.getX() - from.pos.getX();
         double dz    = to.pos.getZ() - from.pos.getZ();
         double dy    = to.pos.getY() - from.pos.getY();
@@ -533,18 +533,18 @@ final class AotvWalkPathfinder {
         };
     }
 
-    private static List<WalkPathNode> buildPath(WalkPathNode end) {
-        List<WalkPathNode> path = new ArrayList<>();
-        WalkPathNode cur = end;
+    private static List<WalkNode> buildPath(WalkNode end) {
+        List<WalkNode> path = new ArrayList<>();
+        WalkNode cur = end;
         while (cur != null) { path.add(cur); cur = cur.parent; }
         Collections.reverse(path);
         return path;
     }
 
-    private static List<WalkPathNode> simplifyPath(Level world, List<WalkPathNode> path,
+    private static List<WalkNode> simplifyPath(Level world, List<WalkNode> path,
                                                     BlockPos pathStart, BlockPos pathEnd) {
         if (path.size() <= 2) return path;
-        List<WalkPathNode> out = new ArrayList<>();
+        List<WalkNode> out = new ArrayList<>();
         out.add(path.get(0));
         int cur = 0;
         while (cur < path.size() - 1) {
@@ -558,23 +558,23 @@ final class AotvWalkPathfinder {
         return out;
     }
 
-    private static boolean canMoveDirectly(Level world, WalkPathNode from, WalkPathNode to,
+    private static boolean canMoveDirectly(Level world, WalkNode from, WalkNode to,
                                             BlockPos pathStart, BlockPos pathEnd) {
-        if (from.type != WalkPathNode.Type.WALK && from.type != WalkPathNode.Type.EDGE) return false;
-        if (to.type   != WalkPathNode.Type.WALK && to.type   != WalkPathNode.Type.EDGE) return false;
+        if (from.type != WalkNode.Type.WALK && from.type != WalkNode.Type.EDGE) return false;
+        if (to.type   != WalkNode.Type.WALK && to.type   != WalkNode.Type.EDGE) return false;
         if (to.pos.getY() != from.pos.getY()) return false;
         return isPathClear(world, from.pos, to.pos, pathStart, pathEnd);
     }
 
-    private static List<WalkPathNode> markEdgeNodes(List<WalkPathNode> path) {
+    private static List<WalkNode> markEdgeNodes(List<WalkNode> path) {
         if (path.size() < 2) return path;
-        List<WalkPathNode> out = new ArrayList<>(path.size());
+        List<WalkNode> out = new ArrayList<>(path.size());
         for (int i = 0; i < path.size(); i++) {
-            WalkPathNode node = path.get(i);
+            WalkNode node = path.get(i);
             if (i < path.size() - 1
-                    && path.get(i + 1).type == WalkPathNode.Type.DROP
-                    && node.type == WalkPathNode.Type.WALK) {
-                WalkPathNode edge = new WalkPathNode(node.pos, node.precisePos, node.parent, WalkPathNode.Type.EDGE);
+                    && path.get(i + 1).type == WalkNode.Type.DROP
+                    && node.type == WalkNode.Type.WALK) {
+                WalkNode edge = new WalkNode(node.pos, node.precisePos, node.parent, WalkNode.Type.EDGE);
                 edge.gCost = node.gCost;
                 out.add(edge);
             } else {
@@ -584,17 +584,17 @@ final class AotvWalkPathfinder {
         return out;
     }
 
-    private static List<WalkPathNode> smoothPrecisePositions(List<WalkPathNode> path) {
+    private static List<WalkNode> smoothPrecisePositions(List<WalkNode> path) {
         if (path.size() <= 2) return path;
-        List<WalkPathNode> out = new ArrayList<>(path.size());
+        List<WalkNode> out = new ArrayList<>(path.size());
         out.add(path.get(0));
 
         for (int i = 1; i < path.size() - 1; i++) {
-            WalkPathNode prev = out.get(out.size() - 1);
-            WalkPathNode curr = path.get(i);
-            WalkPathNode next = path.get(i + 1);
+            WalkNode prev = out.get(out.size() - 1);
+            WalkNode curr = path.get(i);
+            WalkNode next = path.get(i + 1);
 
-            if ((curr.type == WalkPathNode.Type.WALK || curr.type == WalkPathNode.Type.EDGE)
+            if ((curr.type == WalkNode.Type.WALK || curr.type == WalkNode.Type.EDGE)
                     && prev.pos.getY() == curr.pos.getY()
                     && curr.pos.getY() == next.pos.getY()) {
 
@@ -611,7 +611,7 @@ final class AotvWalkPathfinder {
                                        Math.min(curr.pos.getX() + 0.70, pv.x + ldx * t));
                         double projZ = Math.max(curr.pos.getZ() + 0.30,
                                        Math.min(curr.pos.getZ() + 0.70, pv.z + ldz * t));
-                        WalkPathNode smoothed = new WalkPathNode(curr.pos,
+                        WalkNode smoothed = new WalkNode(curr.pos,
                                 new Vec3(projX, curr.pos.getY(), projZ),
                                 null, curr.type);
                         smoothed.gCost = curr.gCost;
@@ -626,14 +626,14 @@ final class AotvWalkPathfinder {
         return out;
     }
 
-    private static List<WalkPathNode> adjustSprintJumpTakeoffPositions(List<WalkPathNode> path) {
+    private static List<WalkNode> adjustSprintJumpTakeoffPositions(List<WalkNode> path) {
         if (path.size() < 2) return path;
-        List<WalkPathNode> out = new ArrayList<>(path);
+        List<WalkNode> out = new ArrayList<>(path);
         for (int i = 0; i < path.size() - 1; i++) {
-            WalkPathNode curr = path.get(i);
-            WalkPathNode next = path.get(i + 1);
-            if (next.type != WalkPathNode.Type.SPRINT_JUMP) continue;
-            if (curr.type != WalkPathNode.Type.WALK && curr.type != WalkPathNode.Type.EDGE) continue;
+            WalkNode curr = path.get(i);
+            WalkNode next = path.get(i + 1);
+            if (next.type != WalkNode.Type.SPRINT_JUMP) continue;
+            if (curr.type != WalkNode.Type.WALK && curr.type != WalkNode.Type.EDGE) continue;
 
             Vec3 launch = curr.precisePos, land = next.precisePos;
             double segDx = land.x - launch.x, segDz = land.z - launch.z;
@@ -646,7 +646,7 @@ final class AotvWalkPathfinder {
             double optZ = Math.max(curr.pos.getZ() + 0.30,
                           Math.min(curr.pos.getZ() + 0.70, launch.z + nz * 0.2));
 
-            WalkPathNode shifted = new WalkPathNode(curr.pos,
+            WalkNode shifted = new WalkNode(curr.pos,
                     new Vec3(optX, curr.pos.getY(), optZ), null, curr.type);
             shifted.gCost = curr.gCost;
             out.set(i, shifted);
@@ -664,5 +664,5 @@ final class AotvWalkPathfinder {
         return totalX;
     }
 
-    record Result(List<WalkPathNode> path, boolean reachedGoal, double bestDistanceSq) {}
+    record Result(List<WalkNode> path, boolean reachedGoal, double bestDistanceSq) {}
 }

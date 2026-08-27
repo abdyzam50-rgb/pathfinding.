@@ -1,9 +1,9 @@
-package com.abdy2.aotvpathfinder;
+package com.abdy2.aotvpathfinder.diag;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public final class HypixelManaTracker {
+public final class ManaTracker {
     private static final Pattern MANA_PATTERN = Pattern.compile("([0-9,]+)/([0-9,]+)\\s*Mana");
 
     private int currentMana = -1;
