@@ -1,5 +1,7 @@
 package com.abdy2.aotvpathfinder;
 
+import com.abdy2.aotvpathfinder.execute.Rotation;
+
 import com.abdy2.aotvpathfinder.render.PathRenderer;
 
 import com.abdy2.aotvpathfinder.config.PathfinderSettings;
@@ -910,7 +912,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         float desiredYaw = (float) (Math.atan2(delta.z, delta.x) * (180.0 / Math.PI)) - 90.0F;
         float desiredPitch = (float) (-(Math.atan2(delta.y, xz) * (180.0 / Math.PI)));
 
-        float yawError = Math.abs(wrapDegrees(desiredYaw - player.getYRot()));
+        float yawError = Math.abs(Rotation.wrapDegrees(desiredYaw - player.getYRot()));
         float pitchError = Math.abs(desiredPitch - player.getXRot());
         float errorThreshold = fastMode ? 6.0F : 3.5F;
         if (yawError > errorThreshold || pitchError > errorThreshold) {
@@ -922,16 +924,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return now - aimStableSinceMs >= settleMs;
     }
 
-    private float wrapDegrees(float degrees) {
-        float wrapped = degrees % 360.0F;
-        if (wrapped >= 180.0F) {
-            wrapped -= 360.0F;
-        }
-        if (wrapped < -180.0F) {
-            wrapped += 360.0F;
-        }
-        return wrapped;
-    }
+    
 
     private boolean walkToStep(Minecraft client, LocalPlayer player, PathHop step) {
         Vec3 target = Vec3.atCenterOf(step.landing()).add(0.0, 0.62, 0.0);
@@ -1019,8 +1012,8 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             if (!hasCastLineFor(player, alt, altTarget)) {
                 continue;
             }
-            float yaw = desiredYaw(player, altTarget);
-            float delta = Math.abs(wrapDegrees(yaw - currentYaw));
+            float yaw = Rotation.desiredYaw(player, altTarget);
+            float delta = Math.abs(Rotation.wrapDegrees(yaw - currentYaw));
             if (delta < bestYawDelta) {
                 bestYawDelta = delta;
                 bestIndex = i;
@@ -1530,17 +1523,17 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     }
 
     private void lookAtWalkHuman(LocalPlayer player, Vec3 target) {
-        float desiredYaw = desiredYaw(player, target);
-        float yawDelta = Math.abs(wrapDegrees(desiredYaw - player.getYRot()));
+        float desiredYaw = Rotation.desiredYaw(player, target);
+        float yawDelta = Math.abs(Rotation.wrapDegrees(desiredYaw - player.getYRot()));
         float yawStep = yawDelta > 35.0F ? 42.0F : WALK_YAW_STEP_DEG;
-        float nextYaw = approachAngle(player.getYRot(), desiredYaw, yawStep);
-        float nextPitch = approachLinear(player.getXRot(), walkPitchLock, WALK_PITCH_STEP_DEG);
-        applyRotation(player, nextYaw, nextPitch);
+        float nextYaw = Rotation.approachAngle(player.getYRot(), desiredYaw, yawStep);
+        float nextPitch = Rotation.approachLinear(player.getXRot(), walkPitchLock, WALK_PITCH_STEP_DEG);
+        Rotation.applyRotation(player, nextYaw, nextPitch);
     }
 
     private void lookAtTeleportHuman(LocalPlayer player, Vec3 target, boolean fastMode) {
-        float desiredYaw = desiredYaw(player, target);
-        float desiredPitch = desiredPitch(player, target);
+        float desiredYaw = Rotation.desiredYaw(player, target);
+        float desiredPitch = Rotation.desiredPitch(player, target);
 
         double targetDist = player.getEyePosition().distanceTo(target);
         float farScale = (float) Math.max(0.68, Math.min(1.0, 1.0 - ((targetDist - 8.0) / 34.0)));
@@ -1548,74 +1541,24 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         float yawMaxStep = (fastMode ? TELEPORT_YAW_STEP_DEG * 1.15F : TELEPORT_YAW_STEP_DEG) * farScale;
         float pitchMaxStep = (fastMode ? TELEPORT_PITCH_STEP_DEG * 1.15F : TELEPORT_PITCH_STEP_DEG) * farScale;
 
-        float nextYaw = approachAngleEased(player.getYRot(), desiredYaw, yawMaxStep, 0.8F);
-        float nextPitch = approachLinearEased(player.getXRot(), desiredPitch, pitchMaxStep, 0.6F);
-        applyRotation(player, nextYaw, nextPitch);
+        float nextYaw = Rotation.approachAngleEased(player.getYRot(), desiredYaw, yawMaxStep, 0.8F);
+        float nextPitch = Rotation.approachLinearEased(player.getXRot(), desiredPitch, pitchMaxStep, 0.6F);
+        Rotation.applyRotation(player, nextYaw, nextPitch);
     }
 
-    private float desiredYaw(LocalPlayer player, Vec3 target) {
-        Vec3 delta = target.subtract(player.getEyePosition());
-        return (float) (Math.atan2(delta.z, delta.x) * (180.0 / Math.PI)) - 90.0F;
-    }
+    
 
-    private float desiredPitch(LocalPlayer player, Vec3 target) {
-        Vec3 delta = target.subtract(player.getEyePosition());
-        double xz = Math.sqrt(delta.x * delta.x + delta.z * delta.z);
-        return (float) (-(Math.atan2(delta.y, xz) * (180.0 / Math.PI)));
-    }
+    
 
-    private float approachAngle(float current, float target, float maxStep) {
-        float delta = wrapDegrees(target - current);
-        float step = Math.max(-maxStep, Math.min(maxStep, delta));
-        return current + step;
-    }
+    
 
-    private float approachLinear(float current, float target, float maxStep) {
-        float delta = target - current;
-        if (Math.abs(delta) <= maxStep) {
-            return target;
-        }
-        return current + Math.copySign(maxStep, delta);
-    }
+    
 
-    private float approachAngleEased(float current, float target, float maxStep, float minStep) {
-        float delta = wrapDegrees(target - current);
-        float magnitude = Math.abs(delta);
-        if (magnitude < 0.01F) {
-            return target;
-        }
+    
 
-        float longTurnScale = (float) Math.max(0.52, Math.min(1.0, 1.0 - (magnitude / 220.0)));
-        float dynamicMax = Math.max(minStep, maxStep * longTurnScale);
-        float eased = (float) (Math.sqrt(magnitude) * 1.35F);
-        float step = Math.max(minStep, Math.min(dynamicMax, eased));
-        if (magnitude <= step) {
-            return target;
-        }
-        return current + Math.copySign(step, delta);
-    }
+    
 
-    private float approachLinearEased(float current, float target, float maxStep, float minStep) {
-        float delta = target - current;
-        float magnitude = Math.abs(delta);
-        if (magnitude < 0.01F) {
-            return target;
-        }
-
-        float eased = (float) (Math.sqrt(magnitude) * 1.4F);
-        float step = Math.max(minStep, Math.min(maxStep, eased));
-        if (magnitude <= step) {
-            return target;
-        }
-        return current + Math.copySign(step, delta);
-    }
-
-    private void applyRotation(LocalPlayer player, float yaw, float pitch) {
-        player.setYBodyRot(yaw);
-        player.setYHeadRot(yaw);
-        player.setYRot(yaw);
-        player.setXRot(pitch);
-    }
+    
 
 
     private boolean hasCastLineFor(LocalPlayer player, PathHop hop, Vec3 target) {
@@ -1664,7 +1607,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     }
 
     private void updateSpinDetector(LocalPlayer player, Vec3 target, long now) {
-        float yawDelta = wrapDegrees(desiredYaw(player, target) - player.getYRot());
+        float yawDelta = Rotation.wrapDegrees(Rotation.desiredYaw(player, target) - player.getYRot());
         int currentSign = yawDelta > 0.2F ? 1 : (yawDelta < -0.2F ? -1 : 0);
         int previousSign = lastYawDelta > 0.2F ? 1 : (lastYawDelta < -0.2F ? -1 : 0);
         if (currentSign != 0 && previousSign != 0 && currentSign != previousSign) {
