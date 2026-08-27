@@ -1,5 +1,9 @@
 package com.abdy2.aotvpathfinder;
 
+import com.abdy2.aotvpathfinder.ability.CastRules;
+import com.abdy2.aotvpathfinder.path.HopType;
+import com.abdy2.aotvpathfinder.path.PathHop;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -70,7 +74,7 @@ public final class AotvFaultLog {
         int maxAttempts,
         int stepIndex,
         int stepCount,
-        TeleportHop step,
+        PathHop step,
         BlockPos goal,
         int currentMana,
         double abilityRange,
@@ -122,7 +126,7 @@ public final class AotvFaultLog {
         }
         sb.append('\n');
 
-        TeleportHop step = f.step();
+        PathHop step = f.step();
         section(sb, "Failing node");
         if (step == null) {
             detail(sb, "Node", "none (route had no current step)");
@@ -181,7 +185,7 @@ public final class AotvFaultLog {
     }
 
     private String summarise(Fault f, LocalPlayer player) {
-        TeleportHop step = f.step();
+        PathHop step = f.step();
         if (step == null) {
             return "#" + faultCount + " " + f.reason() + " step=" + f.stepIndex() + "/" + f.stepCount();
         }

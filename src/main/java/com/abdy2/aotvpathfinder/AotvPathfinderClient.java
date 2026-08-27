@@ -1,5 +1,9 @@
 package com.abdy2.aotvpathfinder;
 
+import com.abdy2.aotvpathfinder.ability.CastRules;
+import com.abdy2.aotvpathfinder.path.HopType;
+import com.abdy2.aotvpathfinder.path.PathHop;
+
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
 
@@ -68,9 +72,9 @@ public class AotvPathfinderClient implements ClientModInitializer {
     private KeyMapping liveAiToggleKey;
 
     private BlockPos goal;
-    private volatile List<TeleportHop> activePath = new ArrayList<>();
-    private volatile List<TeleportHop> livePreviewPath = new ArrayList<>();
-    private volatile List<TeleportHop> livePlannedPath = new ArrayList<>();
+    private volatile List<PathHop> activePath = new ArrayList<>();
+    private volatile List<PathHop> livePreviewPath = new ArrayList<>();
+    private volatile List<PathHop> livePlannedPath = new ArrayList<>();
     private BlockPos liveGoal;
     private int currentStepIndex;
     private int liveStepIndex;
@@ -326,7 +330,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
     private int buildPreviewPath(Minecraft client, BlockPos target) {
         LocalPlayer player = client.player;
-        List<TeleportHop> path;
+        List<PathHop> path;
         try {
             path = pathfinder.findPath(player, player.blockPosition(), target, manaTracker.currentMana(), settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
         } catch (Exception e) {
@@ -355,11 +359,11 @@ public class AotvPathfinderClient implements ClientModInitializer {
         int walk = 0;
         int manaCost = 0;
 
-        for (TeleportHop hop : path) {
+        for (PathHop hop : path) {
             manaCost += hop.manaCost();
-            if (hop.type() == TeleportHop.HopType.NORMAL) {
+            if (hop.type() == HopType.NORMAL) {
                 normal++;
-            } else if (hop.type() == TeleportHop.HopType.SHIFT) {
+            } else if (hop.type() == HopType.SHIFT) {
                 shift++;
             } else {
                 walk++;
@@ -500,7 +504,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
             return;
         }
 
-        List<TeleportHop> path;
+        List<PathHop> path;
         try {
             path = pathfinder.findPath(player, player.blockPosition(), goal, manaTracker.currentMana(), settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
         } catch (Exception e) {
@@ -520,7 +524,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         resetProgressTracking();
         resetLiveStabilizer();
         rebuildAttempts = 0;
-        int manaCost = path.stream().mapToInt(TeleportHop::manaCost).sum();
+        int manaCost = path.stream().mapToInt(PathHop::manaCost).sum();
         sendChat(player, "Path built: " + path.size() + " steps, est mana " + manaCost + ".");
     }
 
@@ -530,7 +534,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
             return;
         }
 
-        TeleportHop step = activePath.get(currentStepIndex);
+        PathHop step = activePath.get(currentStepIndex);
         lookAtTeleportHuman(player, aimTargetForHop(player, step), false);
         player.setShiftKeyDown(step.requiresShift());
         sendChat(player, "Aimed at step " + (currentStepIndex + 1) + "/" + activePath.size() + " [" + step.type() + "]");
@@ -545,7 +549,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
      * merely adjacent — or lower — block registers as "arrived". Because this check runs at the top
      * of every tick before any movement, that let a stationary player retire one node per tick.
      */
-    private boolean isStepReached(LocalPlayer player, TeleportHop step) {
+    private boolean isStepReached(LocalPlayer player, PathHop step) {
         Vec3 feet = player.position();
         BlockPos landing = step.landing();
 
@@ -581,7 +585,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
             return;
         }
 
-        TeleportHop step = activePath.get(currentStepIndex);
+        PathHop step = activePath.get(currentStepIndex);
         prebuiltFurthestStepIndex = Math.max(prebuiltFurthestStepIndex, currentStepIndex);
 
         long tickNow = System.currentTimeMillis();
@@ -616,8 +620,8 @@ public class AotvPathfinderClient implements ClientModInitializer {
         // fall burned about forty nodes without the player travelling anywhere near that far.
         // Wait for the ground, then replan from wherever we actually ended up.
         if (!player.onGround() && player.getDeltaMovement().y < -0.08) {
-            boolean fellPastNode = (step.type() == TeleportHop.HopType.NORMAL
-                    || step.type() == TeleportHop.HopType.SHIFT)
+            boolean fellPastNode = (step.type() == HopType.NORMAL
+                    || step.type() == HopType.SHIFT)
                 && player.getY() < step.landing().getY() - 1.1;
             if (fellPastNode) {
                 pendingFallReplan = true;
@@ -707,7 +711,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
             sendChat(player, "Live AI stopped: set a goal with /setgoal x y z.");
             return;
         }
-        if (player.blockPosition().closerThan(dynamicGoal, AotvConfig.GOAL_REACHED_RADIUS)) {
+        if (player.blockPosition().closerThan(dynamicGoal, CastRules.GOAL_REACHED_RADIUS)) {
             stopWalking(client);
             livePlannedPath = new ArrayList<>();
             liveStepIndex = 0;
@@ -723,7 +727,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         boolean noPath = livePlannedPath.isEmpty() || liveStepIndex >= livePlannedPath.size();
 
         if (!noPath) {
-            TeleportHop step = livePlannedPath.get(liveStepIndex);
+            PathHop step = livePlannedPath.get(liveStepIndex);
             liveFurthestStepIndex = Math.max(liveFurthestStepIndex, liveStepIndex);
             // Falling past the current node no longer advances the index here. This runs every
             // tick, so a descent retired one node per tick for its whole duration. Live AI
@@ -752,7 +756,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
             noPath = livePlannedPath.isEmpty() || liveStepIndex >= livePlannedPath.size();
         }
         if (!noPath) {
-            TeleportHop step = livePlannedPath.get(liveStepIndex);
+            PathHop step = livePlannedPath.get(liveStepIndex);
             boolean walkHandoffFalling = step.isWalk() && !player.onGround();
             if (!walkHandoffFalling) {
                 if (step.isWalk()) {
@@ -785,7 +789,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
             lastReplanAtMs = now;
             BlockPos planGoal = dynamicGoal;
-            List<TeleportHop> path = pathfinder.findPath(player, player.blockPosition(), planGoal, manaTracker.currentMana(), settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
+            List<PathHop> path = pathfinder.findPath(player, player.blockPosition(), planGoal, manaTracker.currentMana(), settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
             livePreviewPath = path;
             livePlannedPath = path;
             liveStepIndex = 0;
@@ -809,7 +813,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         }
 
         enforceLiveTargetLock(now);
-        TeleportHop next = livePlannedPath.get(liveStepIndex);
+        PathHop next = livePlannedPath.get(liveStepIndex);
         if (next.isWalk()) {
             if (walkToStep(client, player, next)) {
                 liveStepIndex++;
@@ -869,27 +873,26 @@ public class AotvPathfinderClient implements ClientModInitializer {
         maybeSendClickDebug(player, "CLICK #" + castDebugCount + " [" + next.type().name().toLowerCase(Locale.ROOT) + "] live", now);
     }
 
-    private Vec3 aimTargetForHop(LocalPlayer player, TeleportHop hop) {
-        if (hop.type() == TeleportHop.HopType.SHIFT) {
-            return Vec3.atCenterOf(hop.landing().below());
-        }
-
-        if (settings.teleportMode() == TeleportPathfinder.TeleportMode.JUST_TELEPORT && hop.type() == TeleportHop.HopType.NORMAL) {
+    private Vec3 aimTargetForHop(LocalPlayer player, PathHop hop) {
+        // Teleport-only routing deliberately aims a block higher, to clear ledges on the way in.
+        if (settings.teleportMode() == TeleportPathfinder.TeleportMode.JUST_TELEPORT
+                && hop.type() == HopType.NORMAL) {
             BlockPos above = hop.landing().above();
             if (player.level().getBlockState(above).isAir()) {
                 return Vec3.atCenterOf(above).add(0.0, 0.62, 0.0);
             }
         }
-
-        return saferNormalAimTarget(player, hop.landing());
+        // Everything else comes from the shared rule, so the planner and this agree by
+        // construction rather than by two implementations happening to match.
+        return CastRules.aimPoint(hop, player.getEyePosition());
     }
 
-    private long castCooldownMs(TeleportHop hop) {
+    private long castCooldownMs(PathHop hop) {
         return useFastAirChainTiming(hop) ? 35L : 280L;
     }
 
-    private boolean useFastAirChainTiming(TeleportHop hop) {
-        return settings.airChainEnabled() && hop.type() == TeleportHop.HopType.NORMAL;
+    private boolean useFastAirChainTiming(PathHop hop) {
+        return settings.airChainEnabled() && hop.type() == HopType.NORMAL;
     }
 
     private boolean aimAtAndReady(LocalPlayer player, Vec3 target, long now, boolean fastMode) {
@@ -931,7 +934,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return wrapped;
     }
 
-    private boolean walkToStep(Minecraft client, LocalPlayer player, TeleportHop step) {
+    private boolean walkToStep(Minecraft client, LocalPlayer player, PathHop step) {
         Vec3 target = Vec3.atCenterOf(step.landing()).add(0.0, 0.62, 0.0);
         lookAtWalkHuman(player, target);
 
@@ -1009,8 +1012,8 @@ public class AotvPathfinderClient implements ClientModInitializer {
         int bestIndex = -1;
         float bestYawDelta = Float.MAX_VALUE;
         for (int i = liveStepIndex + 1; i <= maxCheck; i++) {
-            TeleportHop alt = livePlannedPath.get(i);
-            if (alt.type() != TeleportHop.HopType.NORMAL && alt.type() != TeleportHop.HopType.SHIFT) {
+            PathHop alt = livePlannedPath.get(i);
+            if (alt.type() != HopType.NORMAL && alt.type() != HopType.SHIFT) {
                 continue;
             }
             Vec3 altTarget = aimTargetForHop(player, alt);
@@ -1035,10 +1038,10 @@ public class AotvPathfinderClient implements ClientModInitializer {
     }
 
     private boolean tryWalkAroundBlocked(LocalPlayer player, long now, boolean isLive) {
-        List<TeleportHop> path = isLive ? livePlannedPath : activePath;
+        List<PathHop> path = isLive ? livePlannedPath : activePath;
         int idx = isLive ? liveStepIndex : currentStepIndex;
         if (path.isEmpty() || idx >= path.size()) return false;
-        TeleportHop blocked = path.get(idx);
+        PathHop blocked = path.get(idx);
         if (blocked.isWalk()) return false;
 
         Vec3 target = aimTargetForHop(player, blocked);
@@ -1059,8 +1062,8 @@ public class AotvPathfinderClient implements ClientModInitializer {
                 Vec3 lateralEye = new Vec3(lateral.getX() + 0.5, lateral.getY() + 1.62, lateral.getZ() + 0.5);
                 if (!isRayClearFromPosition(player, lateralEye, target)) continue;
 
-                List<TeleportHop> patched = new ArrayList<>(path);
-                patched.add(idx, new TeleportHop(lateral, TeleportHop.HopType.WALK, 0));
+                List<PathHop> patched = new ArrayList<>(path);
+                patched.add(idx, PathHop.of(lateral, HopType.WALK, 0));
                 if (isLive) {
                     livePlannedPath = patched;
                     liveLastAdvanceAtMs = now;
@@ -1199,7 +1202,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
      *
      * @return true if we are making no headway and should be considered stuck
      */
-    private boolean updateProgress(LocalPlayer player, TeleportHop step, int stepIndex, long now) {
+    private boolean updateProgress(LocalPlayer player, PathHop step, int stepIndex, long now) {
         Vec3 target = Vec3.atBottomCenterOf(step.landing());
         double distSq = player.position().distanceToSqr(target);
 
@@ -1245,7 +1248,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
             return;
         }
         try {
-            TeleportHop step = (currentStepIndex >= 0 && currentStepIndex < activePath.size())
+            PathHop step = (currentStepIndex >= 0 && currentStepIndex < activePath.size())
                 ? activePath.get(currentStepIndex)
                 : null;
 
@@ -1264,7 +1267,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
                     ability = "walk";
                 } else {
                     range = maxHopRange(step.type());
-                    ability = step.type() == TeleportHop.HopType.SHIFT ? "etherwarp" : "transmission";
+                    ability = step.type() == HopType.SHIFT ? "etherwarp" : "transmission";
                 }
             }
 
@@ -1315,7 +1318,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         // Start from a clean slate so no held input or stale index leaks into the new route.
         releaseAllInputs(client);
 
-        List<TeleportHop> path;
+        List<PathHop> path;
         try {
             path = pathfinder.findPath(player, player.blockPosition(), goal, manaTracker.currentMana(),
                 settings.movementMode(), settings.teleportMode(), settings.airChainEnabled());
@@ -1389,11 +1392,11 @@ public class AotvPathfinderClient implements ClientModInitializer {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || client.level == null) return;
 
-        List<TeleportHop> route = List.copyOf(liveAi ? livePlannedPath : activePath);
+        List<PathHop> route = List.copyOf(liveAi ? livePlannedPath : activePath);
         int start = liveAi ? liveStepIndex : currentStepIndex;
 
         if (route.isEmpty()) {
-            List<TeleportHop> preview = livePreviewPath;
+            List<PathHop> preview = livePreviewPath;
             if (!preview.isEmpty()) {
                 route = List.copyOf(preview);
                 start = 0;
@@ -1410,7 +1413,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         // Gizmos take world coordinates and handle the camera transform themselves.
         try (var ignored = context.levelRenderer().collectPerFrameRenderThreadGizmos()) {
             for (int i = start; i < end; i++) {
-                TeleportHop hop = route.get(i);
+                PathHop hop = route.get(i);
                 BlockPos p = hop.landing();
                 int color = colorForHop(hop.type());
                 boolean isCurrent = (i == start);
@@ -1455,7 +1458,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
             if (start < route.size()) {
                 Vec3 playerPos = new Vec3(client.player.getX(), client.player.getY() + 0.5, client.player.getZ());
-                TeleportHop firstHop = route.get(start);
+                PathHop firstHop = route.get(start);
                 double firstY = firstHop.isWalk() ? 0.0 : 1.0;
                 Vec3 firstCenter = Vec3.atCenterOf(firstHop.landing()).add(0.0, firstY + 0.45, 0.0);
                 line(playerPos, firstCenter, 0xFF4444, 255, 3.8F);
@@ -1493,27 +1496,27 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return (r << 16) | (g << 8) | b;
     }
 
-    private AABB glowShapeForHop(TeleportHop.HopType type) {
-        if (type == TeleportHop.HopType.SHIFT) return SHIFT_GLOW_SHAPE;
-        if (type == TeleportHop.HopType.WALK) return WALK_GLOW_SHAPE;
+    private AABB glowShapeForHop(HopType type) {
+        if (type == HopType.SHIFT) return SHIFT_GLOW_SHAPE;
+        if (type == HopType.WALK) return WALK_GLOW_SHAPE;
         return NORMAL_GLOW_SHAPE;
     }
 
-    private int colorForHop(TeleportHop.HopType type) {
-        if (type == TeleportHop.HopType.SHIFT) {
+    private int colorForHop(HopType type) {
+        if (type == HopType.SHIFT) {
             return 0xFF55FF;
         }
-        if (type == TeleportHop.HopType.WALK) {
+        if (type == HopType.WALK) {
             return 0xFFFFFF;
         }
         return 0xFFD700;
     }
 
-    private AABB shapeForHop(TeleportHop.HopType type) {
-        if (type == TeleportHop.HopType.SHIFT) {
+    private AABB shapeForHop(HopType type) {
+        if (type == HopType.SHIFT) {
             return SHIFT_NODE_SHAPE;
         }
-        if (type == TeleportHop.HopType.WALK) {
+        if (type == HopType.WALK) {
             return WALK_NODE_SHAPE;
         }
         return NORMAL_NODE_SHAPE;
@@ -1534,7 +1537,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
     }
 
     private String routePreviewText() {
-        List<TeleportHop> route = liveAi ? livePlannedPath : activePath;
+        List<PathHop> route = liveAi ? livePlannedPath : activePath;
         int start = liveAi ? liveStepIndex : currentStepIndex;
         if (route.isEmpty() || start >= route.size()) {
             return "route: none";
@@ -1543,7 +1546,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         int count = Math.min(3, route.size() - start);
         StringBuilder sb = new StringBuilder("route: ");
         for (int i = 0; i < count; i++) {
-            TeleportHop hop = route.get(start + i);
+            PathHop hop = route.get(start + i);
             sb.append(hop.type().name())
                 .append("@")
                 .append(hop.landing().getX()).append(",")
@@ -1565,7 +1568,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         }
 
         if (player.isShiftKeyDown()) {
-            HitResult result = player.pick(AotvConfig.ETHERWARP_RANGE, 0.0F, false);
+            HitResult result = player.pick(CastRules.ETHERWARP_RANGE, 0.0F, false);
             if (result instanceof BlockHitResult blockHit) {
                 BlockPos pos = blockHit.getBlockPos().above();
                 return isSafeLanding(player, pos) ? pos : null;
@@ -1574,7 +1577,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         }
 
         Vec3 look = player.getViewVector(1.0F);
-        Vec3 target = player.getEyePosition().add(look.scale(AotvConfig.TRANSMISSION_RANGE));
+        Vec3 target = player.getEyePosition().add(look.scale(CastRules.TRANSMISSION_RANGE));
         BlockPos center = BlockPos.containing(target);
 
         for (int dy = 2; dy >= -3; dy--) {
@@ -1715,70 +1718,11 @@ public class AotvPathfinderClient implements ClientModInitializer {
         player.setXRot(pitch);
     }
 
-    private Vec3 saferNormalAimTarget(LocalPlayer player, BlockPos landingAirBlock) {
-        BlockPos floor = landingAirBlock.below();
-        Vec3 center = Vec3.atCenterOf(floor);
-        Vec3 from = player.getEyePosition();
-        Vec3 horizontal = new Vec3(center.x - from.x, 0.0, center.z - from.z);
-        double len = Math.sqrt(horizontal.x * horizontal.x + horizontal.z * horizontal.z);
-        if (len > 0.0001) {
-            double nudge = 0.22;
-            center = center.subtract((horizontal.x / len) * nudge, 0.0, (horizontal.z / len) * nudge);
-        }
-        // Aim inside the landing air block. Offsetting from the floor block instead put the aim
-        // point 0.08 *below* the floor's top face, i.e. inside solid ground, and the cast check
-        // requires the ray to miss everything -- so every landing with a solid floor was judged
-        // blocked while air waypoints passed. This also matches the height the planner validates
-        // its corridor against (to.getY() + 0.92), so the two now agree on the same ray.
-        return new Vec3(center.x, landingAirBlock.getY() + 0.92, center.z);
+
+    private boolean hasCastLineFor(LocalPlayer player, PathHop hop, Vec3 target) {
+        return CastRules.castLineClear(player.level(), player, player.getEyePosition(), hop);
     }
 
-    /**
-     * Whether {@code hop} can actually be cast from where the player is standing.
-     *
-     * <p>The two abilities need opposite things from the raycast, so they cannot share one test:
-     *
-     * <ul>
-     *   <li><b>Transmission</b> teleports you to an empty spot, so the ray must reach the target
-     *       without hitting anything — a clean miss.
-     *   <li><b>Etherwarp</b> is aimed <i>at</i> a solid block and puts you on top of it, so the ray
-     *       must <i>hit</i> that exact block. Any face works.
-     * </ul>
-     *
-     * <p>Using the miss-based test for etherwarp rejects every shift hop, because the aim point is
-     * the centre of a solid block and a ray toward it always hits.
-     */
-    private boolean hasCastLineFor(LocalPlayer player, TeleportHop hop, Vec3 target) {
-        if (hop.type() == TeleportHop.HopType.SHIFT) {
-            return etherwarpRayHitsTarget(player, hop.landing().below(), target);
-        }
-        return hasServerStyleCastClear(player, target);
-    }
-
-    /** True when the aim ray lands on {@code solid} itself rather than something in front of it. */
-    private boolean etherwarpRayHitsTarget(LocalPlayer player, BlockPos solid, Vec3 target) {
-        HitResult hit = player.level().clip(new ClipContext(
-            player.getEyePosition(), target, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player
-        ));
-        return hit instanceof BlockHitResult blockHit
-            && blockHit.getType() == HitResult.Type.BLOCK
-            && blockHit.getBlockPos().equals(solid);
-    }
-
-    private boolean hasServerStyleCastClear(LocalPlayer player, Vec3 target) {
-        Vec3 start = player.getEyePosition();
-        HitResult colliderHit = player.level().clip(new ClipContext(
-            start, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player
-        ));
-        if (colliderHit.getType() != HitResult.Type.MISS) {
-            return false;
-        }
-
-        HitResult outlineHit = player.level().clip(new ClipContext(
-            start, target, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player
-        ));
-        return outlineHit.getType() == HitResult.Type.MISS;
-    }
 
     private void maybeSendClickDebug(LocalPlayer player, String msg, long now) {
         if (now - lastClickChatAtMs < 250L) {
@@ -1872,7 +1816,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
         int teleportScanMax = Math.min(activePath.size() - 1, fromIndex + 60);
         for (int i = fromIndex; i <= teleportScanMax; i++) {
-            TeleportHop candidate = activePath.get(i);
+            PathHop candidate = activePath.get(i);
             if (!candidate.isWalk() && isStepPatchReachable(player, candidate)) {
                 currentStepIndex = i;
                 prebuiltFurthestStepIndex = i;
@@ -1883,7 +1827,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         int walkWindow = Math.max(4, settings.walkPatchWindowBlocks());
         int walkMaxIndex = Math.min(activePath.size() - 1, fromIndex + walkWindow);
         for (int i = fromIndex; i <= walkMaxIndex; i++) {
-            TeleportHop candidate = activePath.get(i);
+            PathHop candidate = activePath.get(i);
             if (candidate.isWalk() && isStepPatchReachable(player, candidate)) {
                 currentStepIndex = i;
                 prebuiltFurthestStepIndex = i;
@@ -1902,7 +1846,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
         int teleportScanMax = Math.min(livePlannedPath.size() - 1, fromIndex + 60);
         for (int i = fromIndex; i <= teleportScanMax; i++) {
-            TeleportHop candidate = livePlannedPath.get(i);
+            PathHop candidate = livePlannedPath.get(i);
             if (!candidate.isWalk() && isStepPatchReachable(player, candidate)) {
                 liveStepIndex = i;
                 liveFurthestStepIndex = i;
@@ -1917,7 +1861,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         int walkWindow = Math.max(4, settings.walkPatchWindowBlocks());
         int walkMaxIndex = Math.min(livePlannedPath.size() - 1, fromIndex + walkWindow);
         for (int i = fromIndex; i <= walkMaxIndex; i++) {
-            TeleportHop candidate = livePlannedPath.get(i);
+            PathHop candidate = livePlannedPath.get(i);
             if (candidate.isWalk() && isStepPatchReachable(player, candidate)) {
                 liveStepIndex = i;
                 liveFurthestStepIndex = i;
@@ -1930,7 +1874,7 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return false;
     }
 
-    private boolean isStepPatchReachable(LocalPlayer player, TeleportHop hop) {
+    private boolean isStepPatchReachable(LocalPlayer player, PathHop hop) {
         if (hop.isWalk()) {
             // Horizontal reach only: a walk node several blocks above or below is not something we
             // can simply stroll to, and treating it as patchable makes the route leapfrog nodes.
@@ -1964,24 +1908,12 @@ public class AotvPathfinderClient implements ClientModInitializer {
      * noticeably lengthens downward ones. A downward hop well inside the ability's reach could
      * therefore measure past it and be rejected.
      */
-    private boolean withinHopRange(LocalPlayer player, TeleportHop hop) {
-        // Horizontal only. A transmission landing is settled by gravity after the hop and may sit
-        // as much as MAX_GRAVITY_DROP below the point that was actually aimed at, so straight-line
-        // distance to the landing can far exceed the ability's reach for a perfectly valid hop.
-        // Settling moves the landing in Y alone and never in X/Z, so horizontal distance still
-        // reflects how far the hop really reaches.
-        Vec3 feet = player.position();
-        BlockPos landing = hop.landing();
-        double dx = feet.x - (landing.getX() + 0.5);
-        double dz = feet.z - (landing.getZ() + 0.5);
-        double max = maxHopRange(hop.type()) + HOP_RANGE_TOLERANCE;
-        return dx * dx + dz * dz <= max * max;
+    private boolean withinHopRange(LocalPlayer player, PathHop hop) {
+        return CastRules.withinRange(player.position(), hop);
     }
 
-    private static double maxHopRange(TeleportHop.HopType type) {
-        return type == TeleportHop.HopType.SHIFT
-            ? AotvConfig.ETHERWARP_RANGE
-            : AotvConfig.TRANSMISSION_RANGE;
+    private static double maxHopRange(HopType type) {
+        return CastRules.maxRange(type);
     }
 
     private void registerPatchAttempt(long now) {
