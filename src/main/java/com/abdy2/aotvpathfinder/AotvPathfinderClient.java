@@ -1,5 +1,7 @@
 package com.abdy2.aotvpathfinder;
 
+import com.abdy2.aotvpathfinder.command.PathfinderCommands;
+
 import com.abdy2.aotvpathfinder.execute.Rotation;
 
 import com.abdy2.aotvpathfinder.render.PathRenderer;
@@ -64,7 +66,7 @@ import net.minecraft.tags.FluidTags;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.ItemStack;
 
-public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.RouteView {
+public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.RouteView, PathfinderCommands.Actions {
     private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
         Identifier.fromNamespaceAndPath("aotvpathfinder", "general"));
 
@@ -178,60 +180,10 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("aotvpathfinder", "status"),
             (gui, delta) -> renderer.renderHud(gui, delta));
 
-        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            dispatcher.register(
-                literal("setgoal")
-                    .then(argument("x", IntegerArgumentType.integer())
-                        .then(argument("y", IntegerArgumentType.integer())
-                            .then(argument("z", IntegerArgumentType.integer())
-                                .executes(this::executeSetGoal)
-                            )
-                        )
-                    )
-            );
-
-            dispatcher.register(
-                literal("preview")
-                    .executes(this::executePreview)
-                    .then(literal("clear").executes(this::executePreviewClear))
-                    .then(argument("x", IntegerArgumentType.integer())
-                        .then(argument("y", IntegerArgumentType.integer())
-                            .then(argument("z", IntegerArgumentType.integer())
-                                .executes(this::executePreviewCoords)
-                            )
-                        )
-                    )
-            );
-
-            dispatcher.register(literal("clearpath").executes(this::executeClearAll));
-
-            dispatcher.register(
-                literal("aotv")
-                    .then(literal("mode")
-                        .then(literal("hybrid").executes(ctx -> setModeCommand(PathBuilder.MovementMode.HYBRID)))
-                        .then(literal("walk").executes(ctx -> setModeCommand(PathBuilder.MovementMode.WALK_ONLY)))
-                        .then(literal("teleport").executes(ctx -> setModeCommand(PathBuilder.MovementMode.TELEPORT_ONLY)))
-                    )
-                    .then(literal("tpmode")
-                        .then(literal("shift").executes(ctx -> setTeleportModeCommand(PathBuilder.TeleportMode.SHIFT_ONLY)))
-                        .then(literal("hybrid").executes(ctx -> setTeleportModeCommand(PathBuilder.TeleportMode.HYBRID_TELEPORT)))
-                        .then(literal("just").executes(ctx -> setTeleportModeCommand(PathBuilder.TeleportMode.JUST_TELEPORT)))
-                    )
-                    .then(literal("airchain")
-                        .then(literal("on").executes(ctx -> setAirChainCommand(true)))
-                        .then(literal("off").executes(ctx -> setAirChainCommand(false)))
-                    )
-                    .then(literal("clear").executes(this::executeClearAll))
-                    .then(literal("faults")
-                        .executes(this::executeShowFaults)
-                        .then(literal("clear").executes(this::executeClearFaults))
-                    )
-                    .then(literal("show").executes(ctx -> showSettingsCommand()))
-            );
-        });
+        PathfinderCommands.register(this);
     }
 
-    private int executeSetGoal(CommandContext<?> context) {
+    public int setGoal(CommandContext<?> context) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -246,7 +198,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return 1;
     }
 
-    private int executePreview(CommandContext<?> context) {
+    public int previewToGoal(CommandContext<?> context) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -265,7 +217,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return buildPreviewPath(client, target);
     }
 
-    private int executePreviewCoords(CommandContext<?> context) {
+    public int previewToCoords(CommandContext<?> context) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -277,7 +229,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return buildPreviewPath(client, new BlockPos(x, y, z));
     }
 
-    private int executePreviewClear(CommandContext<?> context) {
+    public int clearPreview(CommandContext<?> context) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -290,7 +242,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     }
 
     /** Prints the most recent faults, newest last, plus where the full log lives. */
-    private int executeShowFaults(CommandContext<?> context) {
+    public int showFaults(CommandContext<?> context) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || faultLog == null) {
             return 0;
@@ -308,7 +260,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return 1;
     }
 
-    private int executeClearFaults(CommandContext<?> context) {
+    public int clearFaults(CommandContext<?> context) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || faultLog == null) {
             return 0;
@@ -319,7 +271,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     }
 
     /** Full state wipe: route, indices, timers, held inputs and the goal itself. */
-    private int executeClearAll(CommandContext<?> context) {
+    public int clearAll(CommandContext<?> context) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -375,7 +327,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return 1;
     }
 
-    private int setModeCommand(PathBuilder.MovementMode mode) {
+    public int setMovementMode(PathBuilder.MovementMode mode) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -385,7 +337,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return 1;
     }
 
-    private int setTeleportModeCommand(PathBuilder.TeleportMode mode) {
+    public int setTeleportMode(PathBuilder.TeleportMode mode) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -395,7 +347,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return 1;
     }
 
-    private int setAirChainCommand(boolean enabled) {
+    public int setAirChain(boolean enabled) {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
@@ -405,7 +357,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return 1;
     }
 
-    private int showSettingsCommand() {
+    public int showSettings() {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             return 0;
