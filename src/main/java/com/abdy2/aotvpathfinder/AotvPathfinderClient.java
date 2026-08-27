@@ -1,5 +1,7 @@
 package com.abdy2.aotvpathfinder;
 
+import com.abdy2.aotvpathfinder.render.PathRenderer;
+
 import com.abdy2.aotvpathfinder.config.PathfinderSettings;
 import com.abdy2.aotvpathfinder.diag.FaultLog;
 import com.abdy2.aotvpathfinder.diag.ManaTracker;
@@ -60,13 +62,14 @@ import net.minecraft.tags.FluidTags;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.ItemStack;
 
-public class AotvPathfinderClient implements ClientModInitializer {
+public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.RouteView {
     private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
         Identifier.fromNamespaceAndPath("aotvpathfinder", "general"));
 
     private final ManaTracker manaTracker = new ManaTracker();
     private final PathBuilder pathfinder = new PathBuilder();
     private FaultLog faultLog;
+    private final PathRenderer renderer = new PathRenderer(this);
     private PathfinderSettings settings;
 
     private KeyMapping setTargetKey;
@@ -154,15 +157,6 @@ public class AotvPathfinderClient implements ClientModInitializer {
     private int rebuildAttempts;
     private long lastRebuildAtMs;
 
-    private static final AABB NORMAL_NODE_SHAPE = new AABB(0.12, 0.0, 0.12, 0.88, 0.95, 0.88);
-    private static final AABB SHIFT_NODE_SHAPE  = new AABB(0.08, 0.0, 0.08, 0.92, 0.72, 0.92);
-    private static final AABB WALK_NODE_SHAPE   = new AABB(0.28, 0.0, 0.28, 0.72, 0.28, 0.72);
-    private static final AABB NORMAL_GLOW_SHAPE = new AABB(0.04, -0.08, 0.04, 0.96, 1.03, 0.96);
-    private static final AABB SHIFT_GLOW_SHAPE  = new AABB(0.0,  -0.08, 0.0,  1.0,  0.80, 1.0);
-    private static final AABB WALK_GLOW_SHAPE   = new AABB(0.20, -0.05, 0.20, 0.80, 0.35, 0.80);
-    private static final AABB CURRENT_BEACON    = new AABB(0.05, 0.0, 0.05, 0.95, 1.4, 0.95);
-    private static final AABB CURRENT_CORE      = new AABB(0.20, 0.08, 0.20, 0.80, 1.20, 0.80);
-    private static final AABB GOAL_SHAPE        = new AABB(0.0, 0.0, 0.0, 1.0, 1.5, 1.0);
 
     @Override
     public void onInitializeClient() {
@@ -178,9 +172,9 @@ public class AotvPathfinderClient implements ClientModInitializer {
 
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> manaTracker.acceptActionBar(message.getString()));
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
-        LevelRenderEvents.BEFORE_GIZMOS.register(this::renderPathEsp);
+        LevelRenderEvents.BEFORE_GIZMOS.register(renderer::renderPathEsp);
         HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("aotvpathfinder", "status"),
-            (gui, delta) -> renderTopRightStatus(gui, delta));
+            (gui, delta) -> renderer.renderHud(gui, delta));
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             dispatcher.register(
@@ -1359,173 +1353,73 @@ public class AotvPathfinderClient implements ClientModInitializer {
         return null;
     }
 
-    private void renderTopRightStatus(GuiGraphicsExtractor gui, DeltaTracker tickCounter) {
+    // --- PathRenderer.RouteView ---------------------------------------------------------
+
+    @Override
+    public List<PathHop> renderRoute() {
+        return liveAi ? livePlannedPath : activePath;
+    }
+
+    @Override
+    public int renderStartIndex() {
+        return liveAi ? liveStepIndex : currentStepIndex;
+    }
+
+    @Override
+    public List<PathHop> previewRoute() {
+        return livePreviewPath;
+    }
+
+    @Override
+    public BlockPos goal() {
+        return goal;
+    }
+
+    @Override
+    public List<String> hudLines() {
         Minecraft client = Minecraft.getInstance();
         LocalPlayer player = client.player;
         if (player == null) {
-            return;
+            return List.of();
         }
-
-        Font tr = client.font;
         BlockPos preview = calculatePreviewLanding(player);
         String mode = liveAi ? "live-ai" : (autoRun ? "auto" : "manual");
         String pathMode = settings.movementMode().name().toLowerCase(Locale.ROOT);
-        String manaText = manaTracker.hasAnyData() ? (manaTracker.currentMana() + "/" + manaTracker.maxMana()) : "n/a";
-        String previewText = preview == null ? "none" : (preview.getX() + " " + preview.getY() + " " + preview.getZ());
-        String goalText = goal == null ? "none" : (goal.getX() + " " + goal.getY() + " " + goal.getZ());
+        String manaText = manaTracker.hasAnyData()
+            ? (manaTracker.currentMana() + "/" + manaTracker.maxMana())
+            : "n/a";
+        String previewText = preview == null
+            ? "none"
+            : (preview.getX() + " " + preview.getY() + " " + preview.getZ());
+        String goalText = goal == null
+            ? "none"
+            : (goal.getX() + " " + goal.getY() + " " + goal.getZ());
 
-        List<String> lines = new ArrayList<>();
-        lines.add("[AOTV] " + mode + " | " + pathMode + " | " + teleportModeLabel(settings.teleportMode()));
-        lines.add("airchain: " + (settings.airChainEnabled() ? "on" : "off") + " | mana: " + manaText);
-        lines.add("goal: " + goalText);
-        lines.add("preview: " + previewText);
-        lines.add(routePreviewText());
-        int xRight = gui.guiWidth() - 8;
-        int y = 8;
-        for (String line : lines) {
-            int x = xRight - tr.width(line);
-            gui.text(tr, line, x, y, 0xEDEDED);
-            y += 10;
-        }
+        return List.of(
+            "[AOTV] " + mode + " | " + pathMode + " | " + teleportModeLabel(settings.teleportMode()),
+            "airchain: " + (settings.airChainEnabled() ? "on" : "off") + " | mana: " + manaText,
+            "goal: " + goalText,
+            "preview: " + previewText,
+            routePreviewText()
+        );
     }
 
     private void updateRouteHighlights(Minecraft client) {
         // Visual path is drawn by renderPathEsp; no block-crack highlights needed.
     }
 
-    private void renderPathEsp(LevelRenderContext context) {
-        Minecraft client = Minecraft.getInstance();
-        if (client.player == null || client.level == null) return;
+    
 
-        List<PathHop> route = List.copyOf(liveAi ? livePlannedPath : activePath);
-        int start = liveAi ? liveStepIndex : currentStepIndex;
 
-        if (route.isEmpty()) {
-            List<PathHop> preview = livePreviewPath;
-            if (!preview.isEmpty()) {
-                route = List.copyOf(preview);
-                start = 0;
-            } else {
-                return;
-            }
-        }
+    
 
-        if (start >= route.size()) start = 0;
-        double pulse = (Math.sin(System.currentTimeMillis() * 0.004) + 1.0) * 0.5;
-        int end = Math.min(route.size(), start + 70);
-        Vec3 previousCenter = null;
+    
 
-        // Gizmos take world coordinates and handle the camera transform themselves.
-        try (var ignored = context.levelRenderer().collectPerFrameRenderThreadGizmos()) {
-            for (int i = start; i < end; i++) {
-                PathHop hop = route.get(i);
-                BlockPos p = hop.landing();
-                int color = colorForHop(hop.type());
-                boolean isCurrent = (i == start);
-                double renderY = hop.isWalk() ? 0.0 : 1.0;
+    
 
-                if (isCurrent) {
-                    double pad = 0.08 + pulse * 0.05;
-                    AABB halo = new AABB(
-                        -pad, -0.06, -pad,
-                        1.0 + pad, 1.5 + pulse * 0.25, 1.0 + pad);
-                    box(halo, p, renderY, dimColor(0xFFFFFF, 0.55), 255, 1.4F);
-                    box(CURRENT_BEACON, p, renderY, color, 255, 4.2F);
-                    box(CURRENT_CORE, p, renderY, 0xFFFFFF, 255, 2.6F);
-                } else {
-                    box(glowShapeForHop(hop.type()), p, renderY, dimColor(color, 0.45), 255, 1.3F);
-                    box(shapeForHop(hop.type()), p, renderY, color, 255, 2.8F);
-                }
+    
 
-                Vec3 center = Vec3.atCenterOf(p).add(0.0, renderY + 0.45, 0.0);
-                if (previousCenter != null) {
-                    float w = isCurrent ? 3.2F : 2.0F;
-                    line(previousCenter, center, color, 230, w);
-                    line(previousCenter.add(0.0, 0.025, 0.0),
-                         center.add(0.0, 0.025, 0.0),
-                         color, 180, Math.max(1.0F, w - 0.8F));
-                    line(previousCenter.add(0.0, -0.025, 0.0),
-                         center.add(0.0, -0.025, 0.0),
-                         dimColor(color, 0.55), 140, Math.max(1.0F, w - 1.0F));
-
-                    // Direction-of-travel marker at the midpoint.
-                    Vec3 seg = center.subtract(previousCenter);
-                    double segLen = seg.length();
-                    if (segLen > 0.5) {
-                        Vec3 d = seg.scale(1.0 / segLen);
-                        Vec3 mid = previousCenter.add(seg.scale(0.45));
-                        Gizmos.arrow(mid, mid.add(d.scale(0.45)), ARGB.color(200, 0xFFFFFF), 1.6F)
-                              .setAlwaysOnTop();
-                    }
-                }
-                previousCenter = center;
-            }
-
-            if (start < route.size()) {
-                Vec3 playerPos = new Vec3(client.player.getX(), client.player.getY() + 0.5, client.player.getZ());
-                PathHop firstHop = route.get(start);
-                double firstY = firstHop.isWalk() ? 0.0 : 1.0;
-                Vec3 firstCenter = Vec3.atCenterOf(firstHop.landing()).add(0.0, firstY + 0.45, 0.0);
-                line(playerPos, firstCenter, 0xFF4444, 255, 3.8F);
-                line(playerPos.add(0.0, 0.025, 0.0),
-                     firstCenter.add(0.0, 0.025, 0.0),
-                     0xFF8888, 180, 2.0F);
-            }
-
-            if (goal != null) {
-                double gp = (Math.sin(System.currentTimeMillis() * 0.003 + 1.0) + 1.0) * 0.5;
-                double gPad = 0.1 + gp * 0.08;
-                AABB goalHalo = new AABB(
-                    -gPad, -0.1, -gPad, 1.0 + gPad, 1.6 + gp * 0.3, 1.0 + gPad);
-                box(goalHalo, goal, 0.0, dimColor(0x00FF44, 0.5), 255, 1.5F);
-                box(GOAL_SHAPE, goal, 0.0, 0x00FF44, 255, 4.5F);
-                box(GOAL_SHAPE, goal, 1.0, 0x00FF44, 255, 2.5F);
-            }
-        }
-    }
-
-    /** Draws a wireframe box whose coordinates are relative to {@code p} (offset up by {@code yOffset}). */
-    private static void box(AABB local, BlockPos p, double yOffset, int rgb, int alpha, float width) {
-        AABB world = local.move(p.getX(), p.getY() + yOffset, p.getZ());
-        Gizmos.cuboid(world, GizmoStyle.stroke(ARGB.color(alpha, rgb), width)).setAlwaysOnTop();
-    }
-
-    private static void line(Vec3 from, Vec3 to, int rgb, int alpha, float width) {
-        Gizmos.line(from, to, ARGB.color(alpha, rgb), width).setAlwaysOnTop();
-    }
-
-    private static int dimColor(int color, double factor) {
-        int r = Math.min(255, (int) (((color >> 16) & 0xFF) * factor));
-        int g = Math.min(255, (int) (((color >> 8) & 0xFF) * factor));
-        int b = Math.min(255, (int) ((color & 0xFF) * factor));
-        return (r << 16) | (g << 8) | b;
-    }
-
-    private AABB glowShapeForHop(HopType type) {
-        if (type == HopType.SHIFT) return SHIFT_GLOW_SHAPE;
-        if (type == HopType.WALK) return WALK_GLOW_SHAPE;
-        return NORMAL_GLOW_SHAPE;
-    }
-
-    private int colorForHop(HopType type) {
-        if (type == HopType.SHIFT) {
-            return 0xFF55FF;
-        }
-        if (type == HopType.WALK) {
-            return 0xFFFFFF;
-        }
-        return 0xFFD700;
-    }
-
-    private AABB shapeForHop(HopType type) {
-        if (type == HopType.SHIFT) {
-            return SHIFT_NODE_SHAPE;
-        }
-        if (type == HopType.WALK) {
-            return WALK_NODE_SHAPE;
-        }
-        return NORMAL_NODE_SHAPE;
-    }
+    
 
     private String teleportModeLabel(PathBuilder.TeleportMode mode) {
         if (mode == PathBuilder.TeleportMode.SHIFT_ONLY) {
