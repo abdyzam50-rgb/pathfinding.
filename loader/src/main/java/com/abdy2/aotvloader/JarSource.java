@@ -16,16 +16,16 @@ import java.util.HexFormat;
 import java.util.Properties;
 
 /**
- * Keeps a local copy of the pathfinder jar in step with the one published on GitHub.
+ * Fetches the published pathfinder jar and stages it for installation.
  *
- * <p>The copy deliberately lives outside {@code mods/}. Fabric opens every jar in that folder at
- * startup and holds it open, and on Windows an open jar cannot be replaced — so a mod that updates
- * itself in place can only ever take effect on the <em>next</em> launch. Keeping the jar somewhere
- * Fabric never looks means it is just a file, replaceable at any moment, and the update applies to
- * the run that downloaded it.
+ * <p>Downloading and installing are separate steps because they cannot happen at the same moment.
+ * Fabric holds every jar in {@code mods/} open for the length of the session, and an open jar
+ * cannot be replaced on Windows, so the file fetched during a run is written to a staging folder
+ * and moved into place early in the following launch. That is the familiar shape: one launch picks
+ * up the update, the next one runs it.
  *
- * <p>Being unable to reach GitHub is not an error. The cached jar is used instead, so the mod still
- * starts offline; only a genuinely absent cache stops it.
+ * <p>Failing to reach GitHub is not an error. Whatever is already installed keeps running, and the
+ * check is simply retried next time.
  */
 final class JarSource {
     private static final String PROPERTIES_FILE = "loader.properties";
@@ -39,57 +39,68 @@ final class JarSource {
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(4);
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(12);
 
-    private final Path directory;
-    private final Path jar;
+    /** Name the jar is installed under. Fixed, so an update replaces rather than accumulates. */
+    static final String JAR_NAME = "aotvpathfinder.jar";
 
-    JarSource(Path directory) {
-        this.directory = directory;
-        this.jar = directory.resolve("aotvpathfinder.jar");
+    private final Path modsDir;
+    private final Path workDir;
+
+    JarSource(Path modsDir, Path workDir) {
+        this.modsDir = modsDir;
+        this.workDir = workDir;
     }
 
-    /** The result of trying to bring the local copy up to date. */
+    Path installedJar() {
+        return modsDir.resolve(JAR_NAME);
+    }
+
+    Path stagedJar() {
+        return workDir.resolve("staged-" + JAR_NAME);
+    }
+
     enum Outcome {
-        /** Downloaded a build different from the one held locally. */
-        UPDATED,
-        /** The published build matches what is already here. */
+        /** A newer build was fetched and is waiting for the next launch. */
+        STAGED,
+        /** What is installed already matches what is published. */
         ALREADY_CURRENT,
-        /** Could not reach GitHub, but a usable cached jar exists. */
-        OFFLINE_USING_CACHE,
-        /** Could not reach GitHub and nothing is cached. */
-        UNAVAILABLE
+        /** An update was fetched earlier and is still waiting to be installed. */
+        ALREADY_STAGED,
+        /** Could not reach GitHub. Whatever is installed keeps running. */
+        UNREACHABLE
     }
 
-    record Result(Outcome outcome, Path jar, String detail) {
-        boolean usable() {
-            return jar != null;
-        }
-    }
+    record Result(Outcome outcome, String detail) {}
 
-    Result fetchLatest() {
+    /** Checks GitHub and stages the jar if it differs from what is installed. */
+    Result checkForUpdate() {
         String url = configuredUrl();
-        byte[] localHash = hashOf(jar);
-
         try {
             byte[] published = download(url);
-            byte[] publishedHash = sha256(published);
+            String publishedHash = shortHash(sha256(published));
 
-            if (localHash != null && MessageDigest.isEqual(localHash, publishedHash)) {
-                return new Result(Outcome.ALREADY_CURRENT, jar, shortHash(publishedHash));
+            byte[] installedHash = hashOf(installedJar());
+            if (installedHash != null && MessageDigest.isEqual(installedHash, sha256(published))) {
+                // Installed copy is current; drop any stale staged file so it cannot be
+                // installed over a newer jar later.
+                Files.deleteIfExists(stagedJar());
+                return new Result(Outcome.ALREADY_CURRENT, publishedHash);
             }
 
-            // Write beside the target and move into place, so a failure part-way through leaves the
-            // previous working jar untouched rather than a truncated one.
-            Files.createDirectories(directory);
-            Path staged = directory.resolve("aotvpathfinder.jar.part");
-            Files.write(staged, published);
-            Files.move(staged, jar, StandardCopyOption.REPLACE_EXISTING);
-            return new Result(Outcome.UPDATED, jar, shortHash(publishedHash));
+            byte[] stagedHash = hashOf(stagedJar());
+            if (stagedHash != null && MessageDigest.isEqual(stagedHash, sha256(published))) {
+                return new Result(Outcome.ALREADY_STAGED, publishedHash);
+            }
+
+            Files.createDirectories(workDir);
+            // Write beside the target and move, so an interrupted download cannot leave a
+            // truncated file that would later be installed.
+            Path partial = workDir.resolve("download.part");
+            Files.write(partial, published);
+            Files.move(partial, stagedJar(), StandardCopyOption.REPLACE_EXISTING);
+            return new Result(Outcome.STAGED, publishedHash);
         } catch (Exception e) {
             String why = e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
-            if (Files.isRegularFile(jar)) {
-                return new Result(Outcome.OFFLINE_USING_CACHE, jar, why);
-            }
-            return new Result(Outcome.UNAVAILABLE, null, why);
+            return new Result(Outcome.UNREACHABLE, why);
         }
     }
 
@@ -116,16 +127,16 @@ final class JarSource {
         }
     }
 
-    /** Guards against a proxy or error page being written over a working jar. */
+    /** Guards against an error page or redirect being staged and later installed as a mod. */
     private static boolean looksLikeJar(byte[] data) {
         return data.length > 512
             && data[0] == 'P' && data[1] == 'K'
             && data[2] == 3 && data[3] == 4;
     }
 
-    /** Where to fetch from, overridable so a different branch or fork can be pointed at. */
+    /** Where to fetch from, overridable so a different branch or fork can be tracked. */
     private String configuredUrl() {
-        Path file = directory.resolve(PROPERTIES_FILE);
+        Path file = workDir.resolve(PROPERTIES_FILE);
         try {
             if (Files.isRegularFile(file)) {
                 Properties props = new Properties();
@@ -137,7 +148,7 @@ final class JarSource {
                     return value.trim();
                 }
             } else {
-                Files.createDirectories(directory);
+                Files.createDirectories(workDir);
                 Files.writeString(file,
                     "# Where the loader fetches the pathfinder jar from.\n"
                         + "# Point this at another branch or a fork to track that instead.\n"
@@ -150,7 +161,7 @@ final class JarSource {
         return DEFAULT_URL;
     }
 
-    private static byte[] hashOf(Path file) {
+    static byte[] hashOf(Path file) {
         try {
             return Files.isRegularFile(file) ? sha256(Files.readAllBytes(file)) : null;
         } catch (Exception e) {
@@ -158,11 +169,11 @@ final class JarSource {
         }
     }
 
-    private static byte[] sha256(byte[] data) throws Exception {
+    static byte[] sha256(byte[] data) throws Exception {
         return MessageDigest.getInstance("SHA-256").digest(data);
     }
 
-    private static String shortHash(byte[] hash) {
+    static String shortHash(byte[] hash) {
         return HexFormat.of().formatHex(hash).substring(0, 12);
     }
 }

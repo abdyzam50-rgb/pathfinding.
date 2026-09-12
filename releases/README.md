@@ -1,25 +1,30 @@
 # Installing
 
-## aotvloader-1.0.0.jar  (install this one)
+## aotvloader-1.1.0.jar  (install this one)
 
-Put it in `mods/` and leave it there. On every launch it fetches the current
-pathfinder build and starts it, so the pathfinder jar never has to be replaced
-by hand again.
+Put it in `mods/` and leave it there. It keeps `mods/aotvpathfinder.jar`
+current on its own, so the jar never has to be replaced by hand again.
 
-The pathfinder is downloaded to `<instance>/minecraft/aotv/` rather than
-`mods/`. That is deliberate: Fabric opens every jar in `mods/` at startup and
-holds it open, and an open jar cannot be replaced on Windows, so a mod that
-updates itself in place can only ever take effect on the *next* launch. Keeping
-it somewhere Fabric never looks means the update applies to the run that
-downloaded it.
+**You do not need to download aotvpathfinder yourself.** The loader fetches it.
 
-**Delete `aotvpathfinder-*.jar` from `mods/` when you install the loader.**
-If both are present Fabric starts the installed copy itself, and the loader
-stands down rather than registering everything twice. It will say so in the log.
+Updates take effect on the launch after they are found:
+
+    launch 1   finds a new build, downloads it
+    launch 2   installs it at startup, and runs it
+
+That delay is unavoidable rather than a shortcut. Fabric holds every jar in
+`mods/` open for the whole session, and an open jar cannot be replaced on
+Windows, so the file fetched during one run is swapped in at the start of the
+next — before anything has opened it.
+
+Keeping the jar in `mods/` is what makes it a real mod to Fabric: it shows up in
+the mod list, crash reports attribute it properly, and it would still work if
+the pathfinder ever gained a mixin.
 
 ## aotvpathfinder-1.0.0.jar  (only if you don't want the loader)
 
-The mod on its own. Put it in `mods/` and update it manually.
+The mod on its own. Put it in `mods/` and update it manually. If you install the
+loader later it will take over this file.
 
 # Settings
 
@@ -29,8 +34,9 @@ The mod on its own. Put it in `mods/` and update it manually.
 
 Point it at another branch or a fork to track that instead.
 
-# Behaviour when GitHub is unreachable
+# When GitHub is unreachable
 
-The download is skipped and the copy already in `aotv/` is used, so the mod
-still starts offline. Only a first run with no connection leaves nothing to
-load. A failed or non-jar response never overwrites a working copy.
+The check is skipped and whatever is installed keeps running, so launching
+offline is fine. Only a first run with no connection leaves nothing to install.
+A failed or non-jar response is never staged, so a bad response cannot replace a
+working jar with an error page.
