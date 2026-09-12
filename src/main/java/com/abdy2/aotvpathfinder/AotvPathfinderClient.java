@@ -3,6 +3,7 @@ package com.abdy2.aotvpathfinder;
 import com.abdy2.aotvpathfinder.command.PathfinderCommands;
 
 import com.abdy2.aotvpathfinder.execute.AimController;
+import com.abdy2.aotvpathfinder.execute.MovementController;
 import com.abdy2.aotvpathfinder.execute.Rotation;
 
 import com.abdy2.aotvpathfinder.render.PathRenderer;
@@ -62,6 +63,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private FaultLog faultLog;
     private final PathRenderer renderer = new PathRenderer(this);
     private final AimController aim = new AimController();
+    private final MovementController movement = new MovementController(aim);
     private PathfinderSettings settings;
 
     private KeyMapping setTargetKey;
@@ -264,7 +266,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         goal = target;
         autoRun = false;
         liveAi = false;
-        stopWalking(client);
+        movement.stopWalking(client);
 
         activePath = path;
         currentStepIndex = 0;
@@ -350,7 +352,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         if (!autoRun && !liveAi) {
-            stopWalking(client);
+            movement.stopWalking(client);
         }
 
         updateRouteHighlights(client);
@@ -396,7 +398,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
                 resetLiveStabilizer();
                 sendChat(client.player, "Live AI enabled.");
             } else {
-                stopWalking(client);
+                movement.stopWalking(client);
                 livePlannedPath = new ArrayList<>();
                 liveGoal = null;
                 resetLiveStabilizer();
@@ -489,7 +491,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private void runPrebuiltRoute(Minecraft client) {
         LocalPlayer player = client.player;
         if (currentStepIndex >= activePath.size()) {
-            stopWalking(client);
+            movement.stopWalking(client);
             // Ran out of route without arriving: the plan was stale, so make a new one.
             if (goal != null && !isAtGoal(player)) {
                 attemptRebuild(client, "route ended short of goal");
@@ -544,7 +546,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             if (fellPastNode) {
                 pendingFallReplan = true;
             }
-            stopWalking(client);
+            movement.stopWalking(client);
             return;
         }
         if (pendingFallReplan) {
@@ -563,13 +565,13 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         if (step.isWalk()) {
-            if (walkToStep(client, player, step)) {
+            if (movement.walkToStep(client, player, step)) {
                 currentStepIndex++;
             }
             return;
         }
 
-        stopWalking(client);
+        movement.stopWalking(client);
         if (!ensureAotvEquipped(client, player)) {
             return;
         }
@@ -620,7 +622,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
 
         BlockPos dynamicGoal = goal;
         if (dynamicGoal == null) {
-            stopWalking(client);
+            movement.stopWalking(client);
             livePlannedPath = new ArrayList<>();
             liveStepIndex = 0;
             liveGoal = null;
@@ -630,7 +632,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             return;
         }
         if (player.blockPosition().closerThan(dynamicGoal, CastRules.GOAL_REACHED_RADIUS)) {
-            stopWalking(client);
+            movement.stopWalking(client);
             livePlannedPath = new ArrayList<>();
             liveStepIndex = 0;
             liveGoal = dynamicGoal;
@@ -658,7 +660,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
                 markStepAdvanced(now);
                 liveFurthestStepIndex = Math.max(liveFurthestStepIndex, liveStepIndex);
                 if (liveStepIndex >= livePlannedPath.size()) {
-                    stopWalking(client);
+                    movement.stopWalking(client);
                     liveAi = false;
                     resetLiveStabilizer();
                     sendChat(player, "Live AI completed path and turned off.");
@@ -720,26 +722,26 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
                 sendChat(player, "rebuild: " + replanReason);
             }
             if (path.isEmpty()) {
-                stopWalking(client);
+                movement.stopWalking(client);
                 return;
             }
         }
 
         if (livePlannedPath.isEmpty() || liveStepIndex >= livePlannedPath.size()) {
-            stopWalking(client);
+            movement.stopWalking(client);
             return;
         }
 
         enforceLiveTargetLock(now);
         PathHop next = livePlannedPath.get(liveStepIndex);
         if (next.isWalk()) {
-            if (walkToStep(client, player, next)) {
+            if (movement.walkToStep(client, player, next)) {
                 liveStepIndex++;
                 liveLastAdvanceAtMs = now;
                 markStepAdvanced(now);
                 liveFurthestStepIndex = Math.max(liveFurthestStepIndex, liveStepIndex);
                 if (liveStepIndex >= livePlannedPath.size()) {
-                    stopWalking(client);
+                    movement.stopWalking(client);
                     liveAi = false;
                     resetLiveStabilizer();
                     sendChat(player, "Live AI completed path and turned off.");
@@ -748,7 +750,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             return;
         }
 
-        stopWalking(client);
+        movement.stopWalking(client);
         if (!ensureAotvEquipped(client, player)) {
             return;
         }
@@ -815,74 +817,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
 
     
 
-    private boolean walkToStep(Minecraft client, LocalPlayer player, PathHop step) {
-        Vec3 target = Vec3.atCenterOf(step.landing()).add(0.0, 0.62, 0.0);
-        aim.lookAtWalkHuman(player, target);
 
-        Vec3 here = new Vec3(player.getX(), player.getY(), player.getZ());
-        double dist = here.distanceTo(target);
-        if (dist < 1.15) {
-            stopWalking(client);
-            return true;
-        }
-
-        if (client.options != null) {
-            client.options.keyUp.setDown(true);
-            client.options.keyDown.setDown(false);
-            client.options.keyLeft.setDown(false);
-            client.options.keyRight.setDown(false);
-            client.options.keyShift.setDown(false);
-            client.options.keyJump.setDown(false);
-
-            boolean inWater = player.level().getBlockState(player.blockPosition()).getFluidState().is(FluidTags.WATER)
-                || player.level().getBlockState(player.blockPosition().above()).getFluidState().is(FluidTags.WATER);
-            if (inWater) {
-                boolean targetHigher = step.landing().getY() >= player.getY() - 0.05;
-                client.options.keyJump.setDown(targetHigher);
-                return false;
-            }
-
-            double hereFloor = floorTopY(player, player.blockPosition());
-            double nextFloor = floorTopY(player, step.landing().below());
-            double floorDelta = nextFloor - hereFloor;
-            boolean uphillStep = floorDelta > 0.78;
-            var aheadDir = player.getDirection();
-            BlockPos ahead = player.blockPosition().relative(aheadDir);
-            BlockState aheadState = player.level().getBlockState(ahead);
-            boolean stepLikeAhead = aheadState.getBlock() instanceof SlabBlock || aheadState.getBlock() instanceof StairBlock;
-            boolean oneBlockObstacleAhead = !stepLikeAhead
-                && aheadState.isSolid()
-                && player.level().getBlockState(ahead.above()).isAir();
-
-            int cliffDropAhead = dropDistanceToFloor(player, ahead, 24);
-            boolean cliffAhead = cliffDropAhead > 3;
-            if (cliffAhead) {
-                client.options.keyUp.setDown(false);
-                client.options.keyShift.setDown(true);
-                client.options.keyJump.setDown(false);
-                return false;
-            }
-
-            boolean shouldJump = (uphillStep || oneBlockObstacleAhead) && dist < 2.35 && floorDelta >= 0.78;
-            client.options.keyJump.setDown(shouldJump);
-            if (shouldJump && player.onGround()) {
-                player.jumpFromGround();
-            }
-        }
-
-        return false;
-    }
-
-    private int dropDistanceToFloor(LocalPlayer player, BlockPos pos, int maxDrop) {
-        BlockPos cursor = pos;
-        for (int drop = 0; drop <= maxDrop; drop++) {
-            if (player.level().getBlockState(cursor.below()).isSolid()) {
-                return drop;
-            }
-            cursor = cursor.below();
-        }
-        return maxDrop + 1;
-    }
 
     private boolean tryLocalBlockedRayFallback(LocalPlayer player, long now) {
         if (livePlannedPath.isEmpty() || liveStepIndex >= livePlannedPath.size()) {
@@ -973,43 +908,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return true;
     }
 
-    private double floorTopY(LocalPlayer player, BlockPos floorPos) {
-        BlockState below = player.level().getBlockState(floorPos);
-        var shape = below.getCollisionShape(player.level(), floorPos);
-        if (shape.isEmpty()) {
-            return floorPos.getY();
-        }
-        return floorPos.getY() + shape.max(Direction.Axis.Y);
-    }
 
-    private void stopWalking(Minecraft client) {
-        if (client.options == null) {
-            return;
-        }
-        client.options.keyUp.setDown(false);
-        client.options.keyDown.setDown(false);
-        client.options.keyLeft.setDown(false);
-        client.options.keyRight.setDown(false);
-        client.options.keyJump.setDown(false);
-    }
-
-    /**
-     * Releases every input the router can hold, including sneak.
-     *
-     * <p>{@link #stopWalking} deliberately leaves sneak alone because shift-hops toggle it
-     * mid-cast, but that means a run aborting between "shift down" and "cast complete" leaves the
-     * player crouched. Anything that ends or restarts a run must come through here instead.
-     */
-    private void releaseAllInputs(Minecraft client) {
-        stopWalking(client);
-        if (client.options != null) {
-            client.options.keyShift.setDown(false);
-            client.options.keySprint.setDown(false);
-        }
-        if (client.player != null) {
-            client.player.setShiftKeyDown(false);
-        }
-    }
 
     /**
      * Single authoritative teardown for a routing run.
@@ -1051,7 +950,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         lastRebuildAtMs = 0L;
         pendingFallReplan = false;
 
-        releaseAllInputs(client);
+        movement.releaseAllInputs(client);
         clearHighlights(client);
 
         if (clearGoal) {
@@ -1195,7 +1094,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         rebuildAttempts++;
 
         // Start from a clean slate so no held input or stale index leaks into the new route.
-        releaseAllInputs(client);
+        movement.releaseAllInputs(client);
 
         List<PathHop> path;
         try {
@@ -1341,7 +1240,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             HitResult result = player.pick(CastRules.ETHERWARP_RANGE, 0.0F, false);
             if (result instanceof BlockHitResult blockHit) {
                 BlockPos pos = blockHit.getBlockPos().above();
-                return isSafeLanding(player, pos) ? pos : null;
+                return movement.isSafeLanding(player, pos) ? pos : null;
             }
             return null;
         }
@@ -1352,7 +1251,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
 
         for (int dy = 2; dy >= -3; dy--) {
             BlockPos candidate = center.offset(0, dy, 0);
-            if (isSafeLanding(player, candidate) && hasLineOfSight(player, candidate)) {
+            if (movement.isSafeLanding(player, candidate) && hasLineOfSight(player, candidate)) {
                 return candidate;
             }
         }
@@ -1372,11 +1271,6 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return hit.getType() == HitResult.Type.MISS;
     }
 
-    private boolean isSafeLanding(LocalPlayer player, BlockPos pos) {
-        return player.level().getBlockState(pos).isAir()
-            && player.level().getBlockState(pos.above()).isAir()
-            && player.level().getBlockState(pos.below()).isSolid();
-    }
 
     private static boolean isHoldingAotv(ItemStack stack) {
         if (stack == null || stack.isEmpty()) {
