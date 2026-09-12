@@ -3,6 +3,7 @@ package com.abdy2.aotvpathfinder;
 import com.abdy2.aotvpathfinder.command.PathfinderCommands;
 
 import com.abdy2.aotvpathfinder.execute.AimController;
+import com.abdy2.aotvpathfinder.execute.CastController;
 import com.abdy2.aotvpathfinder.execute.MovementController;
 import com.abdy2.aotvpathfinder.execute.Rotation;
 
@@ -65,6 +66,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private final AimController aim = new AimController();
     private final MovementController movement = new MovementController(aim);
     private PathfinderSettings settings;
+    private final CastController cast = new CastController(() -> settings);
 
     private KeyMapping setTargetKey;
     private KeyMapping buildPathKey;
@@ -96,17 +98,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private int prebuiltFurthestStepIndex;
     private int liveFurthestStepIndex;
 
-    // Arrival tolerances, measured from the player's feet to the landing block's centre.
-    // Horizontal is kept inside (or barely outside) the 1x1 block footprint so that a node only
-    // retires once the player is genuinely standing on it, and vertical is bounded separately so a
-    // node above or below the player never counts as reached.
-    private static final double WALK_ARRIVE_HORIZONTAL_SQ = 0.55 * 0.55;
-    private static final double WALK_ARRIVE_ABOVE = 1.2;
-    private static final double WALK_ARRIVE_BELOW = 0.6;
-    private static final double HOP_ARRIVE_HORIZONTAL_SQ = 1.0 * 1.0;
-    private static final double HOP_ARRIVE_ABOVE = 2.0;
-    private static final double HOP_ARRIVE_BELOW = 1.2;
-    /** How far vertically a walk node may sit and still be considered patch-reachable on foot. */
+    /** How far vertically a walk node may sit and still be patch-reachable on foot. */
     private static final double WALK_PATCH_MAX_VERTICAL = 2.5;
 
     // --- failure detection / recovery ---
@@ -455,37 +447,9 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         PathHop step = activePath.get(currentStepIndex);
-        aim.lookAtTeleportHuman(player, aimTargetForHop(player, step), false);
+        aim.lookAtTeleportHuman(player, cast.aimTargetForHop(player, step), false);
         player.setShiftKeyDown(step.requiresShift());
         sendChat(player, "Aimed at step " + (currentStepIndex + 1) + "/" + activePath.size() + " [" + step.type() + "]");
-    }
-
-    /**
-     * True once the player has actually arrived at {@code step}.
-     *
-     * <p>This must be measured from the player's real (sub-block) position. Using
-     * {@code blockPosition()} with a spherical {@link net.minecraft.core.Vec3i} radius snaps the
-     * player to integer block coordinates and counts vertical distance the same as horizontal, so a
-     * merely adjacent — or lower — block registers as "arrived". Because this check runs at the top
-     * of every tick before any movement, that let a stationary player retire one node per tick.
-     */
-    private boolean isStepReached(LocalPlayer player, PathHop step) {
-        Vec3 feet = player.position();
-        BlockPos landing = step.landing();
-
-        double dx = feet.x - (landing.getX() + 0.5);
-        double dz = feet.z - (landing.getZ() + 0.5);
-        double horizontalSq = dx * dx + dz * dz;
-        double dy = feet.y - landing.getY();
-
-        if (step.isWalk()) {
-            return horizontalSq <= WALK_ARRIVE_HORIZONTAL_SQ
-                && dy > -WALK_ARRIVE_BELOW
-                && dy < WALK_ARRIVE_ABOVE;
-        }
-        return horizontalSq <= HOP_ARRIVE_HORIZONTAL_SQ
-            && dy > -HOP_ARRIVE_BELOW
-            && dy < HOP_ARRIVE_ABOVE;
     }
 
     private void runPrebuiltRoute(Minecraft client) {
@@ -493,11 +457,11 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         if (currentStepIndex >= activePath.size()) {
             movement.stopWalking(client);
             // Ran out of route without arriving: the plan was stale, so make a new one.
-            if (goal != null && !isAtGoal(player)) {
+            if (goal != null && !cast.isAtGoal(player, goal)) {
                 attemptRebuild(client, "route ended short of goal");
                 return;
             }
-            if (goal != null && isAtGoal(player)) {
+            if (goal != null && cast.isAtGoal(player, goal)) {
                 sendChat(player, "Arrived.");
                 boolean keepGoal = true;
                 resetRunState(client, !keepGoal);
@@ -555,7 +519,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
                 return;
             }
         }
-        if (isStepReached(player, step)) {
+        if (cast.isStepReached(player, step)) {
             currentStepIndex++;
             prebuiltFurthestStepIndex = Math.max(prebuiltFurthestStepIndex, currentStepIndex);
             return;
@@ -572,7 +536,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         movement.stopWalking(client);
-        if (!ensureAotvEquipped(client, player)) {
+        if (!cast.ensureAotvEquipped(client, player)) {
             return;
         }
 
@@ -582,20 +546,20 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         long now = System.currentTimeMillis();
-        if (now - lastCastAtMs < castCooldownMs(step) || client.gameMode == null) {
+        if (now - lastCastAtMs < cast.castCooldownMs(step) || client.gameMode == null) {
             return;
         }
 
-        Vec3 stepTarget = aimTargetForHop(player, step);
+        Vec3 stepTarget = cast.aimTargetForHop(player, step);
 
         // Out of reach for the ability that performs this hop. Aiming and clicking would never
         // land, so react now rather than waiting for the stuck timer to notice.
-        if (!withinHopRange(player, step)) {
+        if (!cast.withinHopRange(player, step)) {
             attemptRebuild(client, "node out of range");
             return;
         }
 
-        if (!hasCastLineFor(player, step, stepTarget)) {
+        if (!cast.hasCastLineFor(player, step, stepTarget)) {
             if (tryWalkAroundBlocked(player, now, false)) {
                 return;
             }
@@ -607,7 +571,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             currentStepIndex++;
             return;
         }
-        if (!aim.aimAtAndReady(player, stepTarget, now, useFastAirChainTiming(step))) {
+        if (!aim.aimAtAndReady(player, stepTarget, now, cast.useFastAirChainTiming(step))) {
             return;
         }
         player.setShiftKeyDown(step.requiresShift());
@@ -654,7 +618,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             // replans continuously and will pick a node suited to wherever we actually land.
             // Nothing else about the tick changes, so air-chain casting mid-fall still works.
 
-            if (isStepReached(player, step)) {
+            if (cast.isStepReached(player, step)) {
                 liveStepIndex++;
                 liveLastAdvanceAtMs = now;
                 markStepAdvanced(now);
@@ -751,7 +715,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         movement.stopWalking(client);
-        if (!ensureAotvEquipped(client, player)) {
+        if (!cast.ensureAotvEquipped(client, player)) {
             return;
         }
 
@@ -759,12 +723,12 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         if (mana >= 0 && mana < next.manaCost()) {
             return;
         }
-        if (now - lastCastAtMs < castCooldownMs(next) || client.gameMode == null) {
+        if (now - lastCastAtMs < cast.castCooldownMs(next) || client.gameMode == null) {
             return;
         }
 
-        Vec3 nextTarget = aimTargetForHop(player, next);
-        if (!hasCastLineFor(player, next, nextTarget)) {
+        Vec3 nextTarget = cast.aimTargetForHop(player, next);
+        if (!cast.hasCastLineFor(player, next, nextTarget)) {
             boolean switched = tryLocalBlockedRayFallback(player, now);
             if (switched) {
                 return;
@@ -782,7 +746,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             }
             return;
         }
-        if (!aim.aimAtAndReady(player, nextTarget, now, useFastAirChainTiming(next))) {
+        if (!aim.aimAtAndReady(player, nextTarget, now, cast.useFastAirChainTiming(next))) {
             return;
         }
         player.setShiftKeyDown(next.requiresShift());
@@ -792,27 +756,8 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         maybeSendClickDebug(player, "CLICK #" + castDebugCount + " [" + next.type().name().toLowerCase(Locale.ROOT) + "] live", now);
     }
 
-    private Vec3 aimTargetForHop(LocalPlayer player, PathHop hop) {
-        // Teleport-only routing deliberately aims a block higher, to clear ledges on the way in.
-        if (settings.teleportMode() == PathBuilder.TeleportMode.JUST_TELEPORT
-                && hop.type() == HopType.NORMAL) {
-            BlockPos above = hop.landing().above();
-            if (player.level().getBlockState(above).isAir()) {
-                return Vec3.atCenterOf(above).add(0.0, 0.62, 0.0);
-            }
-        }
-        // Everything else comes from the shared rule, so the planner and this agree by
-        // construction rather than by two implementations happening to match.
-        return CastRules.aimPoint(hop, player.getEyePosition());
-    }
 
-    private long castCooldownMs(PathHop hop) {
-        return useFastAirChainTiming(hop) ? 35L : 280L;
-    }
 
-    private boolean useFastAirChainTiming(PathHop hop) {
-        return settings.airChainEnabled() && hop.type() == HopType.NORMAL;
-    }
 
 
     
@@ -832,8 +777,8 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             if (alt.type() != HopType.NORMAL && alt.type() != HopType.SHIFT) {
                 continue;
             }
-            Vec3 altTarget = aimTargetForHop(player, alt);
-            if (!hasCastLineFor(player, alt, altTarget)) {
+            Vec3 altTarget = cast.aimTargetForHop(player, alt);
+            if (!cast.hasCastLineFor(player, alt, altTarget)) {
                 continue;
             }
             float yaw = Rotation.desiredYaw(player, altTarget);
@@ -860,7 +805,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         PathHop blocked = path.get(idx);
         if (blocked.isWalk()) return false;
 
-        Vec3 target = aimTargetForHop(player, blocked);
+        Vec3 target = cast.aimTargetForHop(player, blocked);
         BlockPos playerPos = player.blockPosition();
 
         int[][] dirs = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
@@ -958,16 +903,6 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
     }
 
-    private boolean isAtGoal(LocalPlayer player) {
-        if (goal == null) {
-            return false;
-        }
-        Vec3 feet = player.position();
-        double dx = feet.x - (goal.getX() + 0.5);
-        double dz = feet.z - (goal.getZ() + 0.5);
-        return dx * dx + dz * dz <= HOP_ARRIVE_HORIZONTAL_SQ
-            && Math.abs(feet.y - goal.getY()) <= HOP_ARRIVE_ABOVE;
-    }
 
     private void resetProgressTracking() {
         lastProgressAtMs = 0L;
@@ -1038,13 +973,13 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             if (step != null) {
                 // Record the same verdicts the router acted on, so a report can be read without
                 // having to re-derive why each guard fired.
-                inRange = withinHopRange(player, step);
-                castLine = hasCastLineFor(player, step, aimTargetForHop(player, step));
-                reached = isStepReached(player, step);
+                inRange = cast.withinHopRange(player, step);
+                castLine = cast.hasCastLineFor(player, step, cast.aimTargetForHop(player, step));
+                reached = cast.isStepReached(player, step);
                 if (step.isWalk()) {
                     ability = "walk";
                 } else {
-                    range = maxHopRange(step.type());
+                    range = cast.maxHopRange(step.type());
                     ability = step.type() == HopType.SHIFT ? "etherwarp" : "transmission";
                 }
             }
@@ -1232,7 +1167,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     }
 
     private BlockPos calculatePreviewLanding(LocalPlayer player) {
-        if (!isHoldingAotv(player.getMainHandItem())) {
+        if (!cast.isHoldingAotv(player.getMainHandItem())) {
             return null;
         }
 
@@ -1272,27 +1207,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     }
 
 
-    private static boolean isHoldingAotv(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) {
-            return false;
-        }
 
-        String name = stack.getHoverName().getString().toLowerCase(Locale.ROOT);
-        return name.contains("aspect of the void") || name.contains("aspect of the end");
-    }
-
-    private boolean ensureAotvEquipped(Minecraft client, LocalPlayer player) {
-        if (isHoldingAotv(player.getMainHandItem())) {
-            return true;
-        }
-        for (int i = 0; i < 9; i++) {
-            if (isHoldingAotv(player.getInventory().getItem(i))) {
-                player.getInventory().setSelectedSlot(i);
-                return false;
-            }
-        }
-        return false;
-    }
 
 
 
@@ -1311,9 +1226,6 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     
 
 
-    private boolean hasCastLineFor(LocalPlayer player, PathHop hop, Vec3 target) {
-        return CastRules.castLineClear(player.level(), player, player.getEyePosition(), hop);
-    }
 
 
     private void maybeSendClickDebug(LocalPlayer player, String msg, long now) {
@@ -1448,28 +1360,12 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         // range check any distant node in open view wins: every walk node in between is discarded
         // and the router then parks on a node it can never cast to (transmission reaches 12 blocks,
         // etherwarp 61). Bound by the range of the ability that would actually perform the hop.
-        if (!withinHopRange(player, hop)) {
+        if (!cast.withinHopRange(player, hop)) {
             return false;
         }
-        return hasCastLineFor(player, hop, aimTargetForHop(player, hop));
+        return cast.hasCastLineFor(player, hop, cast.aimTargetForHop(player, hop));
     }
 
-    /**
-     * Whether {@code hop} is close enough to be cast from where the player stands.
-     *
-     * <p>Measured feet-to-landing, matching how the planner reasons about hop length. Measuring
-     * eye-to-aim-point instead does not agree with it: the eye sits ~1.62 above the feet while the
-     * transmission aim point sits just below the landing block, which shortens level hops and
-     * noticeably lengthens downward ones. A downward hop well inside the ability's reach could
-     * therefore measure past it and be rejected.
-     */
-    private boolean withinHopRange(LocalPlayer player, PathHop hop) {
-        return CastRules.withinRange(player.position(), hop);
-    }
-
-    private static double maxHopRange(HopType type) {
-        return CastRules.maxRange(type);
-    }
 
     private void registerPatchAttempt(long now) {
         patchAttemptTimes.addLast(now);
