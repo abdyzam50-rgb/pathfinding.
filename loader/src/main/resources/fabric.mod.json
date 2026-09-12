@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "aotvloader",
+  "version": "${version}",
+  "name": "AOTV Loader",
+  "description": "Downloads the current AOTV Pathfinder build on every launch and starts it, so the mod jar never has to be replaced by hand.",
+  "authors": ["abdyzam50"],
+  "contact": {
+    "sources": "https://github.com/abdyzam50-rgb/pathfinding."
+  },
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.abdy2.aotvloader.AotvLoader"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": ">=26.2",
+    "java": ">=25"
+  }
+}

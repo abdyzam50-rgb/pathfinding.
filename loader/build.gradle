@@ -1,0 +1,41 @@
+plugins {
+    id 'fabric-loom' version '1.18.0-alpha.17'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    // Same identity mappings as the main mod: MC 26.x ships unobfuscated.
+    mappings files('../mappings/identity.jar')
+
+    // Only the loader API is needed. The pathfinder's own Fabric API usage resolves at
+    // runtime through the parent class loader, so this jar stays tiny.
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+}
+
+java {
+    sourceCompatibility = JavaVersion.toVersion(project.java_version)
+    targetCompatibility = JavaVersion.toVersion(project.java_version)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = 'UTF-8'
+    it.options.release = Integer.parseInt(project.java_version)
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filteringCharset 'UTF-8'
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+}
+
+// The identity mappings jar has no intermediary namespace, so source remapping cannot run.
+tasks.matching { it.name == 'remapSourcesJar' }.configureEach { enabled = false }
