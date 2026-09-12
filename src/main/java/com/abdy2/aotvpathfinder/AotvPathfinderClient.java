@@ -2,6 +2,7 @@ package com.abdy2.aotvpathfinder;
 
 import com.abdy2.aotvpathfinder.command.PathfinderCommands;
 
+import com.abdy2.aotvpathfinder.execute.AimController;
 import com.abdy2.aotvpathfinder.execute.Rotation;
 
 import com.abdy2.aotvpathfinder.render.PathRenderer;
@@ -74,6 +75,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private final PathBuilder pathfinder = new PathBuilder();
     private FaultLog faultLog;
     private final PathRenderer renderer = new PathRenderer(this);
+    private final AimController aim = new AimController();
     private PathfinderSettings settings;
 
     private KeyMapping setTargetKey;
@@ -99,22 +101,8 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private long liveLastAdvanceAtMs;
     private long liveNodeLockUntilMs;
     private int liveLockedStepIndex = -1;
-    private long spinStartedAtMs;
-    private long lastYawSignFlipAtMs;
-    private int yawSignFlipCount;
-    private float lastYawDelta;
-    private double lastTargetDistSq = Double.POSITIVE_INFINITY;
     private long lastClickChatAtMs;
-    private Vec3 lastAimTarget;
-    private long aimStableSinceMs;
-    private float walkPitchLock = 8.0F;
 
-    private static final float WALK_YAW_STEP_DEG = 24.0F;
-    private static final float WALK_PITCH_STEP_DEG = 1.4F;
-    private static final float TELEPORT_YAW_STEP_DEG = 14.0F;
-    private static final float TELEPORT_PITCH_STEP_DEG = 11.0F;
-    private static final long SPIN_WINDOW_MS = 650L;
-    private static final long SPIN_TRIGGER_MS = 600L;
     private static final long PATCH_WINDOW_MS = 1000L;
     private final ArrayDeque<Long> patchAttemptTimes = new ArrayDeque<>();
     private int prebuiltFurthestStepIndex;
@@ -488,7 +476,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         PathHop step = activePath.get(currentStepIndex);
-        lookAtTeleportHuman(player, aimTargetForHop(player, step), false);
+        aim.lookAtTeleportHuman(player, aimTargetForHop(player, step), false);
         player.setShiftKeyDown(step.requiresShift());
         sendChat(player, "Aimed at step " + (currentStepIndex + 1) + "/" + activePath.size() + " [" + step.type() + "]");
     }
@@ -640,7 +628,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             currentStepIndex++;
             return;
         }
-        if (!aimAtAndReady(player, stepTarget, now, useFastAirChainTiming(step))) {
+        if (!aim.aimAtAndReady(player, stepTarget, now, useFastAirChainTiming(step))) {
             return;
         }
         player.setShiftKeyDown(step.requiresShift());
@@ -797,7 +785,6 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         Vec3 nextTarget = aimTargetForHop(player, next);
-        updateSpinDetector(player, nextTarget, now);
         if (!hasCastLineFor(player, next, nextTarget)) {
             boolean switched = tryLocalBlockedRayFallback(player, now);
             if (switched) {
@@ -816,7 +803,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             }
             return;
         }
-        if (!aimAtAndReady(player, nextTarget, now, useFastAirChainTiming(next))) {
+        if (!aim.aimAtAndReady(player, nextTarget, now, useFastAirChainTiming(next))) {
             return;
         }
         player.setShiftKeyDown(next.requiresShift());
@@ -848,39 +835,12 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return settings.airChainEnabled() && hop.type() == HopType.NORMAL;
     }
 
-    private boolean aimAtAndReady(LocalPlayer player, Vec3 target, long now, boolean fastMode) {
-        lookAtTeleportHuman(player, target, fastMode);
-
-        if (lastAimTarget == null || lastAimTarget.distanceToSqr(target) > 0.04) {
-            lastAimTarget = target;
-            aimStableSinceMs = now;
-            if (!fastMode) {
-                return false;
-            }
-        }
-
-        Vec3 delta = target.subtract(player.getEyePosition());
-        double xz = Math.sqrt(delta.x * delta.x + delta.z * delta.z);
-        float desiredYaw = (float) (Math.atan2(delta.z, delta.x) * (180.0 / Math.PI)) - 90.0F;
-        float desiredPitch = (float) (-(Math.atan2(delta.y, xz) * (180.0 / Math.PI)));
-
-        float yawError = Math.abs(Rotation.wrapDegrees(desiredYaw - player.getYRot()));
-        float pitchError = Math.abs(desiredPitch - player.getXRot());
-        float errorThreshold = fastMode ? 6.0F : 3.5F;
-        if (yawError > errorThreshold || pitchError > errorThreshold) {
-            aimStableSinceMs = now;
-            return false;
-        }
-
-        long settleMs = fastMode ? 20L : 125L;
-        return now - aimStableSinceMs >= settleMs;
-    }
 
     
 
     private boolean walkToStep(Minecraft client, LocalPlayer player, PathHop step) {
         Vec3 target = Vec3.atCenterOf(step.landing()).add(0.0, 0.62, 0.0);
-        lookAtWalkHuman(player, target);
+        aim.lookAtWalkHuman(player, target);
 
         Vec3 here = new Vec3(player.getX(), player.getY(), player.getZ());
         double dist = here.distanceTo(target);
@@ -1106,9 +1066,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         lastClickChatAtMs = 0L;
         castDebugCount = 0;
 
-        lastAimTarget = null;
-        aimStableSinceMs = 0L;
-        walkPitchLock = 8.0F;
+        aim.reset();
 
         resetLiveStabilizer();
         resetProgressTracking();
@@ -1474,29 +1432,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return false;
     }
 
-    private void lookAtWalkHuman(LocalPlayer player, Vec3 target) {
-        float desiredYaw = Rotation.desiredYaw(player, target);
-        float yawDelta = Math.abs(Rotation.wrapDegrees(desiredYaw - player.getYRot()));
-        float yawStep = yawDelta > 35.0F ? 42.0F : WALK_YAW_STEP_DEG;
-        float nextYaw = Rotation.approachAngle(player.getYRot(), desiredYaw, yawStep);
-        float nextPitch = Rotation.approachLinear(player.getXRot(), walkPitchLock, WALK_PITCH_STEP_DEG);
-        Rotation.applyRotation(player, nextYaw, nextPitch);
-    }
 
-    private void lookAtTeleportHuman(LocalPlayer player, Vec3 target, boolean fastMode) {
-        float desiredYaw = Rotation.desiredYaw(player, target);
-        float desiredPitch = Rotation.desiredPitch(player, target);
-
-        double targetDist = player.getEyePosition().distanceTo(target);
-        float farScale = (float) Math.max(0.68, Math.min(1.0, 1.0 - ((targetDist - 8.0) / 34.0)));
-
-        float yawMaxStep = (fastMode ? TELEPORT_YAW_STEP_DEG * 1.15F : TELEPORT_YAW_STEP_DEG) * farScale;
-        float pitchMaxStep = (fastMode ? TELEPORT_PITCH_STEP_DEG * 1.15F : TELEPORT_PITCH_STEP_DEG) * farScale;
-
-        float nextYaw = Rotation.approachAngleEased(player.getYRot(), desiredYaw, yawMaxStep, 0.8F);
-        float nextPitch = Rotation.approachLinearEased(player.getXRot(), desiredPitch, pitchMaxStep, 0.6F);
-        Rotation.applyRotation(player, nextYaw, nextPitch);
-    }
 
     
 
@@ -1552,49 +1488,12 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private void markStepAdvanced(long now) {
         liveLockedStepIndex = liveStepIndex;
         liveNodeLockUntilMs = now + lockWindowMs();
-        lastTargetDistSq = Double.POSITIVE_INFINITY;
-        spinStartedAtMs = 0L;
-        yawSignFlipCount = 0;
-        lastYawDelta = 0.0F;
     }
 
-    private void updateSpinDetector(LocalPlayer player, Vec3 target, long now) {
-        float yawDelta = Rotation.wrapDegrees(Rotation.desiredYaw(player, target) - player.getYRot());
-        int currentSign = yawDelta > 0.2F ? 1 : (yawDelta < -0.2F ? -1 : 0);
-        int previousSign = lastYawDelta > 0.2F ? 1 : (lastYawDelta < -0.2F ? -1 : 0);
-        if (currentSign != 0 && previousSign != 0 && currentSign != previousSign) {
-            if (now - lastYawSignFlipAtMs <= SPIN_WINDOW_MS) {
-                yawSignFlipCount++;
-            } else {
-                yawSignFlipCount = 1;
-            }
-            lastYawSignFlipAtMs = now;
-        }
-        lastYawDelta = yawDelta;
-
-        double distSq = player.getEyePosition().distanceToSqr(target);
-        boolean makingProgress = distSq < lastTargetDistSq - 0.08;
-        if (makingProgress) {
-            spinStartedAtMs = 0L;
-            yawSignFlipCount = 0;
-        } else if (Math.abs(yawDelta) > 14.0F && yawSignFlipCount >= 3) {
-            if (spinStartedAtMs == 0L) {
-                spinStartedAtMs = now;
-            }
-        } else {
-            spinStartedAtMs = 0L;
-        }
-        lastTargetDistSq = distSq;
-    }
 
     private void resetLiveStabilizer() {
         liveNodeLockUntilMs = 0L;
         liveLockedStepIndex = -1;
-        spinStartedAtMs = 0L;
-        lastYawSignFlipAtMs = 0L;
-        yawSignFlipCount = 0;
-        lastYawDelta = 0.0F;
-        lastTargetDistSq = Double.POSITIVE_INFINITY;
         patchAttemptTimes.clear();
     }
 
