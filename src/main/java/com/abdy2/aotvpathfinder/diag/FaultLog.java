@@ -1,7 +1,5 @@
 package com.abdy2.aotvpathfinder.diag;
 
-import com.abdy2.aotvpathfinder.ability.CastRules;
-import com.abdy2.aotvpathfinder.path.HopType;
 import com.abdy2.aotvpathfinder.path.PathHop;
 
 import java.io.IOException;

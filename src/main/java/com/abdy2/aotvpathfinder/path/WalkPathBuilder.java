@@ -432,19 +432,6 @@ final class WalkPathBuilder {
             || state.getBlock() instanceof ScaffoldingBlock;
     }
 
-    private static double getBlockMaxHeight(Level world, BlockPos pos) {
-        BlockState state = world.getBlockState(pos);
-        if (state.isAir()) return 0.0;
-        if (state.getBlock() instanceof SlabBlock) {
-            return switch (state.getValue(SlabBlock.TYPE)) {
-                case BOTTOM -> 0.5;
-                default     -> 1.0;
-            };
-        }
-        if (state.getBlock() instanceof FenceBlock || state.getBlock() instanceof WallBlock) return 1.5;
-        VoxelShape shape = state.getCollisionShape(world, pos);
-        return shape.isEmpty() ? 0.0 : shape.max(Direction.Axis.Y);
-    }
 
     private static boolean fenceExtendsInto(Level world, BlockPos pos) {
         BlockPos below = pos.below();

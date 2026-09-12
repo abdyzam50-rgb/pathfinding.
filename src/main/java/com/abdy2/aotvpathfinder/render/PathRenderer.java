@@ -2,7 +2,6 @@ package com.abdy2.aotvpathfinder.render;
 
 import java.util.List;
 
-import com.abdy2.aotvpathfinder.ability.CastRules;
 import com.abdy2.aotvpathfinder.path.HopType;
 import com.abdy2.aotvpathfinder.path.PathHop;
 

@@ -16,12 +16,9 @@ import com.abdy2.aotvpathfinder.ability.CastRules;
 import com.abdy2.aotvpathfinder.path.HopType;
 import com.abdy2.aotvpathfinder.path.PathHop;
 
-import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument;
-import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
-import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.List;
 import java.util.Locale;
@@ -30,16 +27,12 @@ import org.lwjgl.glfw.GLFW;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
-import com.mojang.blaze3d.platform.InputConstants;
 
 import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
-import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
-import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 
 import net.minecraft.world.level.block.state.BlockState;
@@ -48,13 +41,6 @@ import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.KeyMapping;
-import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.DeltaTracker;
-import net.minecraft.gizmos.Gizmos;
-import net.minecraft.gizmos.GizmoStyle;
-import net.minecraft.util.ARGB;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.resources.Identifier;
@@ -120,15 +106,6 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private static final double HOP_ARRIVE_BELOW = 1.2;
     /** How far vertically a walk node may sit and still be considered patch-reachable on foot. */
     private static final double WALK_PATCH_MAX_VERTICAL = 2.5;
-    /**
-     * Tolerance added to nominal hop range when validating a hop client-side.
-     *
-     * <p>Added, not subtracted. Keeping a hop castable is the planner's job, and it already
-     * generates conservatively. This guard exists only to catch the forward patch leapfrogging onto
-     * a node far outside the ability's reach, so it should sit just above what the planner emits.
-     * Subtracting a margin here instead rejected legitimate hops and rebuilt the route on the spot.
-     */
-    private static final double HOP_RANGE_TOLERANCE = 1.0;
 
     // --- failure detection / recovery ---
     /** No measurable progress toward the current node for this long counts as stuck. */
@@ -1246,15 +1223,6 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         return true;
     }
 
-    private BlockPos resolveDynamicGoal(Minecraft client) {
-        if (goal != null) {
-            return goal;
-        }
-        if (client.hitResult instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK) {
-            return hit.getBlockPos().above();
-        }
-        return null;
-    }
 
     // --- PathRenderer.RouteView ---------------------------------------------------------
 
