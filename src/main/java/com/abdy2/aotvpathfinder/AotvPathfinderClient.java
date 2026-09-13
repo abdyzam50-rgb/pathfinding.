@@ -497,21 +497,29 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
                 return;
             }
         }
-        // Falling. Nothing on the route can be acted on mid-air: a hop cannot be cast while
-        // dropping, and once we are below the node we were heading for the rest of the plan no
-        // longer describes where we are. Previously this advanced the index and returned, which
-        // ran once per tick and so retired a node every tick for the whole descent -- a two second
-        // fall burned about forty nodes without the player travelling anywhere near that far.
-        // Wait for the ground, then replan from wherever we actually ended up.
+        // Falling.
+        //
+        // Casting mid-air is not a problem to be avoided here -- for a transmission chain it is
+        // the entire mechanic, each hop fired before the last one lands. An earlier fix for nodes
+        // retiring during a descent went too far and returned unconditionally, which stopped the
+        // chain dead: hop once, fall, do nothing, land, replan.
+        //
+        // What actually cannot be salvaged is a node we have already dropped below, since the plan
+        // from there on no longer describes where we are. Only that case waits for the ground.
         if (!player.onGround() && player.getDeltaMovement().y < -0.08) {
-            boolean fellPastNode = (step.type() == HopType.NORMAL
-                    || step.type() == HopType.SHIFT)
+            boolean fellPastNode = step.isTeleport()
                 && player.getY() < step.landing().getY() - 1.1;
             if (fellPastNode) {
                 pendingFallReplan = true;
+                movement.stopWalking(client);
+                return;
             }
-            movement.stopWalking(client);
-            return;
+            if (step.isWalk()) {
+                // Walking mid-air achieves nothing; wait until there is ground under us.
+                movement.stopWalking(client);
+                return;
+            }
+            // Otherwise fall through and let the hop be cast, chain and all.
         }
         if (pendingFallReplan) {
             pendingFallReplan = false;

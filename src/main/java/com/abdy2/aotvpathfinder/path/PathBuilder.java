@@ -56,6 +56,28 @@ public final class PathBuilder {
         new BlockPos(0, 0, 2), new BlockPos(0, 0, -2)
     };
 
+    /**
+     * Wall-clock ceiling for a whole findPath call.
+     *
+     * <p>The expansion budgets alone do not bound how long a search takes. They sum to roughly
+     * 700,000 expansions, and each one considers a shell of candidate offsets several thousand
+     * wide, many of which raycast. This runs on the client thread, so the cost is paid as a freeze
+     * -- and a failing route rebuilds, paying it again.
+     *
+     * <p>A time limit bounds that directly, whatever the budgets happen to be. Searching stops when
+     * it expires and the best route found so far is used, which is the same thing that happens when
+     * a budget runs out. A quarter second is long enough to plan a sensible route across open
+     * ground and short enough to read as a hitch rather than a hang.
+     */
+    private static final long SEARCH_BUDGET_NANOS = 250_000_000L;
+
+    /** When the current findPath call must stop searching. */
+    private long deadlineNanos = Long.MAX_VALUE;
+
+    private boolean outOfTime() {
+        return System.nanoTime() > deadlineNanos;
+    }
+
     private final WalkPathBuilder walkPathfinder = new WalkPathBuilder();
 
     public List<PathHop> findPath(
@@ -70,6 +92,8 @@ public final class PathBuilder {
         if (start.closerThan(goal, CastRules.GOAL_REACHED_RADIUS)) {
             return List.of();
         }
+
+        deadlineNanos = System.nanoTime() + SEARCH_BUDGET_NANOS;
 
         MovementMode resolvedMode = mode == null ? MovementMode.HYBRID : mode;
         TeleportMode resolvedTeleportMode = teleportMode == null ? TeleportMode.HYBRID_TELEPORT : teleportMode;
@@ -101,6 +125,7 @@ public final class PathBuilder {
                 Math.max(26000, Math.min(100000, distance * 125))
             };
             for (int budget : mixedBudgets) {
+                if (outOfTime()) break;
                 SearchResult mixed = searchOnCustomNodeGraph(player, start, goal, availableMana, true, false, resolvedTeleportMode, budget);
                 if (mixed.reachedGoal()) {
                     return smoothTeleportRoute(player, start, mixed.hops());
@@ -115,6 +140,7 @@ public final class PathBuilder {
                 Math.max(26000, Math.min(120000, distance * 150))
             };
             for (int budget : walkBudgets) {
+                if (outOfTime()) break;
                 SearchResult walkGraph = searchOnCustomNodeGraph(player, start, goal, -1, false, false, resolvedTeleportMode, budget);
                 if (walkGraph.reachedGoal()) {
                     return smoothTeleportRoute(player, start, walkGraph.hops());
@@ -127,6 +153,7 @@ public final class PathBuilder {
                 Math.max(50000, Math.min(180000, distance * 200))
             };
             for (int budget : pureWalkBudgets) {
+                if (outOfTime()) break;
                 SearchResult pureWalk = searchPureWalk(player, start, goal, budget);
                 if (pureWalk.reachedGoal()) {
                     return smoothTeleportRoute(player, start, pureWalk.hops());
@@ -165,6 +192,9 @@ public final class PathBuilder {
         BlockPos bestPos = current;
 
         for (int i = 0; i < maxHops; i++) {
+            if (outOfTime()) {
+                break;
+            }
             if (current.closerThan(goal, CastRules.GOAL_REACHED_RADIUS)) {
                 return new SearchResult(hops, true, 0.0);
             }
@@ -408,6 +438,9 @@ public final class PathBuilder {
 
         int expansions = 0;
         while (!open.isEmpty() && expansions < maxExpansions) {
+            if ((expansions & 0xFF) == 0 && outOfTime()) {
+                break;
+            }
             long currentPacked = open.extractMin();
             if (closed.contains(currentPacked)) {
                 continue;
@@ -492,6 +525,9 @@ public final class PathBuilder {
 
         int expansions = 0;
         while (!queue.isEmpty() && expansions < maxExpansions && graph.size() < maxNodes) {
+            if ((expansions & 0xFF) == 0 && outOfTime()) {
+                break;
+            }
             GraphNode current = queue.poll();
             if (!expanded.add(packPos(current.pos))) {
                 continue;
