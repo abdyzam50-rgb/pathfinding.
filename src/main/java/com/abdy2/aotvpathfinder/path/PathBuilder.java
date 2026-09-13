@@ -100,10 +100,15 @@ public final class PathBuilder {
         int distance = (int) Math.sqrt(start.distSqr(goal));
         SearchResult bestFailed = SearchResult.empty();
 
-        if (allowAirChain && resolvedTeleportMode != TeleportMode.SHIFT_ONLY) {
+        // Walk-only has to exclude this too. The air chain is a teleport strategy, and gating it
+        // on the teleport mode alone let it run in walk-only and return a route made entirely of
+        // hops -- so asking for walking produced no walking at all.
+        if (allowAirChain
+                && resolvedMode != MovementMode.WALK_ONLY
+                && resolvedTeleportMode != TeleportMode.SHIFT_ONLY) {
             SearchResult airChain = searchDirectAirChain(player, start, goal, availableMana, resolvedTeleportMode);
             if (airChain.reachedGoal()) {
-                return smoothTeleportRoute(player, start, airChain.hops());
+                return smoothTeleportRoute(player, start, airChain.hops(), resolvedMode);
             }
             if (!airChain.hops().isEmpty()) {
                 // The chain stopped short. It used to be accepted anyway if it had landed within
@@ -111,7 +116,7 @@ public final class PathBuilder {
                 // and the walk-and-teleport search never ran at all. Walk the remainder instead.
                 SearchResult finished = finishOnFoot(player, airChain, goal);
                 if (finished != null) {
-                    return smoothTeleportRoute(player, start, finished.hops());
+                    return smoothTeleportRoute(player, start, finished.hops(), resolvedMode);
                 }
                 // Still worth keeping: if nothing below gets closer, chooseBetter returns this.
                 bestFailed = chooseBetter(bestFailed, airChain);
@@ -128,7 +133,7 @@ public final class PathBuilder {
                 if (outOfTime()) break;
                 SearchResult mixed = searchOnCustomNodeGraph(player, start, goal, availableMana, true, false, resolvedTeleportMode, budget);
                 if (mixed.reachedGoal()) {
-                    return smoothTeleportRoute(player, start, mixed.hops());
+                    return smoothTeleportRoute(player, start, mixed.hops(), resolvedMode);
                 }
                 bestFailed = chooseBetter(bestFailed, mixed);
             }
@@ -143,7 +148,7 @@ public final class PathBuilder {
                 if (outOfTime()) break;
                 SearchResult walkGraph = searchOnCustomNodeGraph(player, start, goal, -1, false, false, resolvedTeleportMode, budget);
                 if (walkGraph.reachedGoal()) {
-                    return smoothTeleportRoute(player, start, walkGraph.hops());
+                    return smoothTeleportRoute(player, start, walkGraph.hops(), resolvedMode);
                 }
                 bestFailed = chooseBetter(bestFailed, walkGraph);
             }
@@ -156,13 +161,13 @@ public final class PathBuilder {
                 if (outOfTime()) break;
                 SearchResult pureWalk = searchPureWalk(player, start, goal, budget);
                 if (pureWalk.reachedGoal()) {
-                    return smoothTeleportRoute(player, start, pureWalk.hops());
+                    return smoothTeleportRoute(player, start, pureWalk.hops(), resolvedMode);
                 }
                 bestFailed = chooseBetter(bestFailed, pureWalk);
             }
         }
 
-        return smoothTeleportRoute(player, start, bestFailed.hops());
+        return smoothTeleportRoute(player, start, bestFailed.hops(), resolvedMode);
     }
 
     private SearchResult searchDirectAirChain(
@@ -811,7 +816,12 @@ public final class PathBuilder {
         return wrapped;
     }
 
-    private List<PathHop> smoothTeleportRoute(LocalPlayer player, BlockPos start, List<PathHop> input) {
+    private List<PathHop> smoothTeleportRoute(
+        LocalPlayer player,
+        BlockPos start,
+        List<PathHop> input,
+        MovementMode mode
+    ) {
         if (input == null || input.size() < 3) {
             return input;
         }
@@ -824,6 +834,15 @@ public final class PathBuilder {
         while (i < input.size()) {
             PathHop hop = input.get(i);
             if (hop.type() == HopType.WALK) {
+                // Folding walking into a hop is not available when hops are not: this runs on
+                // every route including the walk-only ones, and would otherwise put teleports
+                // into a route that asked for none.
+                if (mode == MovementMode.WALK_ONLY) {
+                    out.add(hop);
+                    current = hop.landing();
+                    i++;
+                    continue;
+                }
                 // Runs of walking get folded into a single hop, which is a fair trade while
                 // covering ground -- one cast beats twelve steps. It is the wrong trade on the
                 // final approach, where a hop needs a valid landing and overshooting costs more
