@@ -1097,6 +1097,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
             "airchain: " + (settings.airChainEnabled() ? "on" : "off") + " | mana: " + manaText,
             "goal: " + goalText,
             "preview: " + previewText,
+            routeCompositionText(),
             routePreviewText()
         );
     }
@@ -1130,6 +1131,46 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
 
     private void clearHighlights(Minecraft client) {
         // No-op: block-crack highlights removed; visual path handled by renderPathEsp.
+    }
+
+    /**
+     * What the current route is made of.
+     *
+     * <p>Worth a line of its own: it answers whether the planner produced the kinds of step it was
+     * meant to. A route with no jump nodes at all on ground that clearly needs them says the
+     * planning went wrong, not the walking.
+     */
+    private String routeCompositionText() {
+        List<PathHop> route = liveAi ? livePlannedPath : activePath;
+        if (route.isEmpty()) {
+            return "nodes: none";
+        }
+        int tp = 0;
+        int warp = 0;
+        int step = 0;
+        int jump = 0;
+        int sprint = 0;
+        for (PathHop hop : route) {
+            switch (hop.type()) {
+                case NORMAL -> tp++;
+                case SHIFT -> warp++;
+                case WALK -> {
+                    switch (hop.style()) {
+                        case JUMP -> jump++;
+                        case SPRINT_JUMP -> sprint++;
+                        case STEP -> step++;
+                    }
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder("nodes: ");
+        sb.append(route.size()).append(" =");
+        if (tp > 0) sb.append(" ").append(tp).append("tp");
+        if (warp > 0) sb.append(" ").append(warp).append("warp");
+        if (step > 0) sb.append(" ").append(step).append("step");
+        if (jump > 0) sb.append(" ").append(jump).append("jump");
+        if (sprint > 0) sb.append(" ").append(sprint).append("sprint");
+        return sb.toString();
     }
 
     private String routePreviewText() {

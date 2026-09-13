@@ -55,6 +55,7 @@ public final class PathRenderer {
     private static final AABB NORMAL_NODE_SHAPE = new AABB(0.12, 0.0, 0.12, 0.88, 0.95, 0.88);
     private static final AABB SHIFT_NODE_SHAPE  = new AABB(0.08, 0.0, 0.08, 0.92, 0.72, 0.92);
     private static final AABB WALK_NODE_SHAPE   = new AABB(0.28, 0.0, 0.28, 0.72, 0.28, 0.72);
+    private static final AABB JUMP_NODE_SHAPE   = new AABB(0.26, 0.0, 0.26, 0.74, 0.85, 0.74);
     private static final AABB NORMAL_GLOW_SHAPE = new AABB(0.04, -0.08, 0.04, 0.96, 1.03, 0.96);
     private static final AABB SHIFT_GLOW_SHAPE  = new AABB(0.0,  -0.08, 0.0,  1.0,  0.80, 1.0);
     private static final AABB WALK_GLOW_SHAPE   = new AABB(0.20, -0.05, 0.20, 0.80, 0.35, 0.80);
@@ -89,7 +90,7 @@ public void renderPathEsp(LevelRenderContext context) {
             for (int i = start; i < end; i++) {
                 PathHop hop = route.get(i);
                 BlockPos p = hop.landing();
-                int color = colorForHop(hop.type());
+                int color = colorForHop(hop);
                 boolean isCurrent = (i == start);
                 double renderY = hop.isWalk() ? 0.0 : 1.0;
 
@@ -102,8 +103,8 @@ public void renderPathEsp(LevelRenderContext context) {
                     box(CURRENT_BEACON, p, renderY, color, 255, 4.2F);
                     box(CURRENT_CORE, p, renderY, 0xFFFFFF, 255, 2.6F);
                 } else {
-                    box(glowShapeForHop(hop.type()), p, renderY, dimColor(color, 0.45), 255, 1.3F);
-                    box(shapeForHop(hop.type()), p, renderY, color, 255, 2.8F);
+                    box(glowShapeForHop(hop), p, renderY, dimColor(color, 0.45), 255, 1.3F);
+                    box(shapeForHop(hop), p, renderY, color, 255, 2.8F);
                 }
 
                 Vec3 center = Vec3.atCenterOf(p).add(0.0, renderY + 0.45, 0.0);
@@ -167,16 +168,40 @@ private static int dimColor(int color, double factor) {
         int b = Math.min(255, (int) ((color & 0xFF) * factor));
         return (r << 16) | (g << 8) | b;
     }
-private int colorForHop(HopType type) {
-        if (type == HopType.SHIFT) {
+/**
+     * Colour for a node, by what it actually asks the player to do.
+     *
+     * <p>Colouring by hop type alone hid the distinction that matters most while checking a route:
+     * a walk node and a jump node looked identical, so there was no way to see whether the planner
+     * had marked a jump in the right place. Walk styles now separate out.
+     *
+     * <pre>
+     *   gold     transmission hop
+     *   magenta  etherwarp hop
+     *   white    ordinary step
+     *   cyan     jump
+     *   orange   sprint jump
+     * </pre>
+     */
+    private int colorForHop(PathHop hop) {
+        if (hop.type() == HopType.SHIFT) {
             return 0xFF55FF;
         }
-        if (type == HopType.WALK) {
-            return 0xFFFFFF;
+        if (hop.type() == HopType.WALK) {
+            return switch (hop.style()) {
+                case JUMP -> 0x33E0FF;
+                case SPRINT_JUMP -> 0xFF9522;
+                case STEP -> 0xFFFFFF;
+            };
         }
         return 0xFFD700;
     }
-private AABB shapeForHop(HopType type) {
+/** Taller box for a jump, so it stands out without depending on colour alone. */
+    private AABB shapeForHop(PathHop hop) {
+        if (hop.requiresJump()) {
+            return JUMP_NODE_SHAPE;
+        }
+        HopType type = hop.type();
         if (type == HopType.SHIFT) {
             return SHIFT_NODE_SHAPE;
         }
@@ -185,7 +210,8 @@ private AABB shapeForHop(HopType type) {
         }
         return NORMAL_NODE_SHAPE;
     }
-private AABB glowShapeForHop(HopType type) {
+private AABB glowShapeForHop(PathHop hop) {
+        HopType type = hop.type();
         if (type == HopType.SHIFT) return SHIFT_GLOW_SHAPE;
         if (type == HopType.WALK) return WALK_GLOW_SHAPE;
         return NORMAL_GLOW_SHAPE;
