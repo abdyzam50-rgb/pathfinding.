@@ -817,10 +817,25 @@ public final class PathBuilder {
         }
         List<PathHop> out = new ArrayList<>();
         BlockPos current = start;
+        // Where the route is heading. The goal itself is not passed in, and the last landing is
+        // the same thing for this purpose.
+        BlockPos routeEnd = input.get(input.size() - 1).landing();
         int i = 0;
         while (i < input.size()) {
             PathHop hop = input.get(i);
             if (hop.type() == HopType.WALK) {
+                // Runs of walking get folded into a single hop, which is a fair trade while
+                // covering ground -- one cast beats twelve steps. It is the wrong trade on the
+                // final approach, where a hop needs a valid landing and overshooting costs more
+                // than the steps it saved. Without this the walking the planner chose was
+                // converted straight back into teleports, which is why routes came out as pure
+                // Aspect of the Void however they had been planned.
+                if (current.closerThan(routeEnd, WALK_APPROACH_RADIUS)) {
+                    out.add(hop);
+                    current = hop.landing();
+                    i++;
+                    continue;
+                }
                 int maxRange = CastRules.TRANSMISSION_RANGE;
                 int scanLimit = Math.min(input.size() - 1, i + maxRange + 6);
                 int skipTo = -1;

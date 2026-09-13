@@ -116,7 +116,6 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
     private long lastProgressAtMs;
     private double bestDistToNodeSq = Double.POSITIVE_INFINITY;
     private int trackedStepIndex = -1;
-    private boolean pendingFallReplan;
     private int rebuildAttempts;
     private long lastRebuildAtMs;
 
@@ -499,33 +498,19 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
         // Falling.
         //
-        // Casting mid-air is not a problem to be avoided here -- for a transmission chain it is
-        // the entire mechanic, each hop fired before the last one lands. An earlier fix for nodes
-        // retiring during a descent went too far and returned unconditionally, which stopped the
-        // chain dead: hop once, fall, do nothing, land, replan.
+        // A transmission chain is fired mid-air by definition, each hop cast before the last one
+        // lands, and a chain descends while gravity pulls harder -- so the player passes below the
+        // next node almost immediately. Treating that as a stale plan, which an earlier version of
+        // this did, ends the chain on its first hop every time. Being below a node does not put it
+        // out of reach either: transmission goes where it is aimed, upward included.
         //
-        // What actually cannot be salvaged is a node we have already dropped below, since the plan
-        // from there on no longer describes where we are. Only that case waits for the ground.
-        if (!player.onGround() && player.getDeltaMovement().y < -0.08) {
-            boolean fellPastNode = step.isTeleport()
-                && player.getY() < step.landing().getY() - 1.1;
-            if (fellPastNode) {
-                pendingFallReplan = true;
-                movement.stopWalking(client);
-                return;
-            }
-            if (step.isWalk()) {
-                // Walking mid-air achieves nothing; wait until there is ground under us.
-                movement.stopWalking(client);
-                return;
-            }
-            // Otherwise fall through and let the hop be cast, chain and all.
-        }
-        if (pendingFallReplan) {
-            pendingFallReplan = false;
-            if (attemptRebuild(client, "fell past node")) {
-                return;
-            }
+        // Whether a hop can still be made is already decided further down by the range and cast
+        // line checks, and a genuinely stuck run is caught by the stuck timer. Neither needs help
+        // from a guess made here.
+        if (!player.onGround() && player.getDeltaMovement().y < -0.08 && step.isWalk()) {
+            // Walking mid-air achieves nothing; wait for ground.
+            movement.stopWalking(client);
+            return;
         }
         if (cast.isStepReached(player, step)) {
             currentStepIndex++;
@@ -901,7 +886,6 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         resetProgressTracking();
         rebuildAttempts = 0;
         lastRebuildAtMs = 0L;
-        pendingFallReplan = false;
 
         movement.releaseAllInputs(client);
         clearHighlights(client);
