@@ -429,7 +429,7 @@ public final class PathBuilder {
         Long2ObjectOpenHashMap<SearchNode> visited = new Long2ObjectOpenHashMap<>(graphNodeBudget);
         LongOpenHashSet closed = new LongOpenHashSet(graphNodeBudget);
 
-        SearchNode first = new SearchNode(startNode, null, 0.0, heuristicWithStart(start, goal, start), 0, HopType.WALK, 0);
+        SearchNode first = new SearchNode(startNode, null, 0.0, heuristicWithStart(start, goal, start), 0, HopType.WALK, 0, startNode.pos);
         open.insertOrUpdate(startPacked, first.fScore);
         visited.put(startPacked, first);
 
@@ -492,7 +492,8 @@ public final class PathBuilder {
                     nextF,
                     nextManaSpent,
                     edge.type,
-                    edge.manaCost
+                    edge.manaCost,
+                    edge.target()
                 );
 
                 visited.put(edgePacked, next);
@@ -544,7 +545,7 @@ public final class PathBuilder {
                     isNew = true;
                 }
 
-                current.edges.add(new GraphEdge(to, neighbor.type, neighbor.manaCost, neighbor.travelCost));
+                current.edges.add(new GraphEdge(to, neighbor.target(), neighbor.type, neighbor.manaCost, neighbor.travelCost));
 
                 if (isNew && shouldExpandNode(start, goal, to.pos, includeTeleports)) {
                     queue.add(to);
@@ -561,7 +562,7 @@ public final class PathBuilder {
                     BlockPos neighborPos = goal.offset(walkOffset).offset(0, dy, 0);
                     GraphNode neighborNode = graph.get(packPos(neighborPos));
                     if (neighborNode != null && isWalkTransitionValid(player, neighborPos, goal)) {
-                        neighborNode.edges.add(new GraphEdge(goalNode, HopType.WALK, 0, 1.35));
+                        neighborNode.edges.add(new GraphEdge(goalNode, goalNode.pos, HopType.WALK, 0, 1.35));
                     }
                 }
             }
@@ -944,6 +945,17 @@ public final class PathBuilder {
         if (!isRayClear(player, from, to, 1.05)) return false;
         if (!isRayClear(player, from, to, 1.62)) return false;
 
+        // Test the ray that will actually be cast, not just ones near it. The two above run at
+        // fixed heights through block centres, which is a reasonable approximation of a clear
+        // corridor but is not the line the executor aims along. It aims from the eye at the
+        // target's aim point, and a hop can pass these checks while that line is obstructed --
+        // which reads, correctly but uselessly, as the planner promising a hop the executor then
+        // refuses. Checking the real line here means a hop that survives planning can be cast.
+        Vec3 eye = CastRules.eyeIn(from);
+        if (!CastRules.rayReaches(player.level(), player, eye, CastRules.aimPoint(to, eye))) {
+            return false;
+        }
+
         if (hasAdjacentSolid(player, from)) {
             double dx = to.getX() - from.getX();
             double dz = to.getZ() - from.getZ();
@@ -1176,7 +1188,7 @@ public final class PathBuilder {
         List<PathHop> reversed = new ArrayList<>();
         SearchNode cursor = node;
         while (cursor != null && cursor.parent != null) {
-            reversed.add(PathHop.of(cursor.node.pos, cursor.type, cursor.manaCost));
+            reversed.add(PathHop.settled(cursor.node.pos, cursor.target, cursor.type, cursor.manaCost));
             cursor = cursor.parent;
         }
         Collections.reverse(reversed);
@@ -1315,8 +1327,21 @@ public final class PathBuilder {
                ((long) pos.getY() & MASK_Y);
     }
 
-    private record Neighbor(BlockPos pos, HopType type, int manaCost, double travelCost) {}
-    private record GraphEdge(GraphNode to, HopType type, int manaCost, double travelCost) {}
+    /**
+     * A candidate step.
+     *
+     * <p>{@code target} is the block the ability is aimed at and {@code pos} is where the player
+     * ends up. For a transmission hop that settles under gravity these differ, sometimes by many
+     * blocks, and both are needed: the landing decides where the route goes next, the target
+     * decides where to aim. Keeping only the landing meant the executor re-derived the target from
+     * it and aimed somewhere the planner never checked.
+     */
+    private record Neighbor(BlockPos pos, BlockPos target, HopType type, int manaCost, double travelCost) {
+        Neighbor(BlockPos pos, HopType type, int manaCost, double travelCost) {
+            this(pos, PathHop.defaultTarget(pos, type), type, manaCost, travelCost);
+        }
+    }
+    private record GraphEdge(GraphNode to, BlockPos target, HopType type, int manaCost, double travelCost) {}
     private record SearchResult(List<PathHop> hops, boolean reachedGoal, double bestDistanceSq) {
         private static SearchResult empty() {
             return new SearchResult(Collections.emptyList(), false, Double.POSITIVE_INFINITY);
@@ -1340,6 +1365,8 @@ public final class PathBuilder {
         private final int manaSpent;
         private final HopType type;
         private final int manaCost;
+        /** Block aimed at to make this step, which is not always where it landed. */
+        private final BlockPos target;
 
         private SearchNode(
             GraphNode node,
@@ -1348,7 +1375,8 @@ public final class PathBuilder {
             double fScore,
             int manaSpent,
             HopType type,
-            int manaCost
+            int manaCost,
+            BlockPos target
         ) {
             this.node = node;
             this.parent = parent;
@@ -1356,6 +1384,7 @@ public final class PathBuilder {
             this.fScore = fScore;
             this.manaSpent = manaSpent;
             this.type = type;
+            this.target = target;
             this.manaCost = manaCost;
         }
     }
