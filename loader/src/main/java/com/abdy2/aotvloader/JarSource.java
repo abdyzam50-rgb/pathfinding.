@@ -58,6 +58,11 @@ final class JarSource {
         return workDir.resolve("staged-" + JAR_NAME);
     }
 
+    /** Where a jar that could not be overwritten is parked until it can be deleted. */
+    Path supersededDir() {
+        return workDir.resolve("superseded");
+    }
+
     enum Outcome {
         /** A newer build was fetched and is waiting for the next launch. */
         STAGED,

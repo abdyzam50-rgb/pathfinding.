@@ -1,6 +1,6 @@
 # Installing
 
-## aotvloader-1.3.0.jar  (install this one)
+## aotvloader-1.4.0.jar  (install this one)
 
 Put it in `mods/` and leave it there. It keeps `mods/aotvpathfinder.jar`
 current on its own, so the jar never has to be replaced by hand again.

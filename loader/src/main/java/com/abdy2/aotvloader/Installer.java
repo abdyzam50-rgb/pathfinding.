@@ -39,6 +39,7 @@ public final class Installer implements PreLaunchEntrypoint {
     public void onPreLaunch() {
         Path gameDir = FabricLoader.getInstance().getGameDir();
         JarSource source = new JarSource(gameDir.resolve("mods"), gameDir.resolve("aotv"));
+        purgeSuperseded(source);
         boolean hadJar = Files.isRegularFile(source.installedJar());
 
         JarSource.Result result = source.checkForUpdate();
@@ -64,26 +65,76 @@ public final class Installer implements PreLaunchEntrypoint {
         if (!Files.isRegularFile(staged)) {
             return false;
         }
+        Path installed = source.installedJar();
+
         try {
-            Files.createDirectories(source.installedJar().getParent());
-            move(staged, source.installedJar());
-            return true;
+            Files.createDirectories(installed.getParent());
         } catch (Exception e) {
-            // Leave the staged file alone and try again next launch rather than interrupting
-            // startup. The jar being open is the usual cause, and that clears on restart.
-            LOG.warn("Could not install build {} yet ({}); will retry next launch",
-                build, e.getClass().getSimpleName());
+            LOG.warn("Could not prepare the mods folder ({})", e.toString());
             return false;
+        }
+
+        // Straight replace. This is the whole job when nothing is installed yet, which is why a
+        // first install has always worked while updates did not.
+        try {
+            move(staged, installed);
+            LOG.info("{} build {}", hadJar ? "Updated to" : "Installed", build);
+            return true;
+        } catch (Exception directFailed) {
+            if (!hadJar) {
+                LOG.warn("Could not write the pathfinder jar ({})", directFailed.toString());
+                return false;
+            }
+            LOG.info("Could not overwrite the installed jar ({}); moving it aside instead",
+                directFailed.getClass().getSimpleName());
+        }
+
+        // Fabric read the existing jar during startup and may still hold it, and an open jar cannot
+        // be overwritten on Windows. Moving it out of the way often succeeds where overwriting does
+        // not, and it has to leave mods/ regardless: two jars declaring the same mod id would stop
+        // Fabric loading at all next launch.
+        try {
+            Path aside = source.supersededDir()
+                .resolve("aotvpathfinder-" + System.currentTimeMillis() + ".jar");
+            Files.createDirectories(aside.getParent());
+            Files.move(installed, aside);
+            move(staged, installed);
+            LOG.info("Updated to build {} (previous jar moved to {})", build, aside.getParent());
+            return true;
+        } catch (Exception asideFailed) {
+            LOG.warn("Could not install build {}: {}", build, asideFailed.toString());
+            LOG.warn("The existing jar is locked. Close any other Minecraft instance and relaunch,");
+            LOG.warn("or delete {} by hand.", installed);
+            return false;
+        }
+    }
+
+    /** Removes jars shifted aside by earlier updates, once nothing can be holding them. */
+    private void purgeSuperseded(JarSource source) {
+        Path dir = source.supersededDir();
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+        try (var entries = Files.list(dir)) {
+            for (Path old : entries.toList()) {
+                try {
+                    Files.deleteIfExists(old);
+                } catch (Exception stillHeld) {
+                    // Another launch will get it.
+                }
+            }
+        } catch (Exception ignored) {
+            // Tidying is optional; never let it affect startup.
         }
     }
 
     /**
      * Ends the launch so the build just written is the one that actually runs.
      *
-     * <p>Fabric has already decided which mods it is loading by the time this runs, so carrying on
-     * would play the previous build for a whole session while a newer one sat unused on disk. That
-     * is worse than a restart: the game looks like it updated and did not. Stopping now is
-     * cheap, because nothing has started yet -- no window, no world, nothing to lose.
+     * <p>Fabric decided which mods it was loading before this ran, so carrying on would play the
+     * previous build for a whole session while a newer one sat unused on disk -- looking like the
+     * update worked when it did not. Stopping now costs nothing: no window has opened and no world
+     * has loaded.
      *
      * <p>Exits zero deliberately. This is a chosen outcome, not a failure, and a launcher should
      * report it as an ordinary close rather than a crash.
