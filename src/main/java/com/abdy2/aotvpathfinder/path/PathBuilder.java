@@ -344,7 +344,14 @@ public final class PathBuilder {
         }
 
 
-        if (best == null && blockedToGoal) {
+        // Climbing is an escape from an obstacle partway along a route: get above it, carry on.
+        // It is the wrong move once we are close and descending. The goal is below us, so going
+        // up cannot bring us nearer -- and from the higher position the descend filters reject
+        // every downward step again, so the next stuck step climbs once more. That loop is how a
+        // route which crossed the map cleanly ends as a tower of hops stacked above the goal.
+        // Stopping here instead leaves the final approach to be walked or replanned, which is
+        // what should have been handling an enclosed goal in the first place.
+        if (best == null && blockedToGoal && !descendPhase) {
             for (int dy = 12; dy >= 6; dy--) {
                 BlockPos climb = from.above(dy);
                 if (seen.contains(packPos(climb))) {
