@@ -36,6 +36,8 @@ public final class PathBuilder {
     }
 
     private static final int MAX_GRAVITY_DROP = 24;
+    /** Within this of the goal, walking is treated as a reasonable way to finish. */
+    private static final double WALK_APPROACH_RADIUS = 20.0;
     private static final int JUST_TELEPORT_MIN_AIR_CLEARANCE = 13;
     private static final double JUST_TELEPORT_FINAL_WALK_RADIUS = 3.0;
     private static final int AIR_CHAIN_SAFE_FALL_DROP = 8;
@@ -80,12 +82,15 @@ public final class PathBuilder {
                 return smoothTeleportRoute(player, start, airChain.hops());
             }
             if (!airChain.hops().isEmpty()) {
-                double startDistSq = start.distSqr(goal);
-                boolean nearGoal     = airChain.bestDistanceSq() < 25.0 * 25.0;
-                boolean mostlyClosed = airChain.bestDistanceSq() < startDistSq * 0.20;
-                if (nearGoal || mostlyClosed) {
-                    return smoothTeleportRoute(player, start, airChain.hops());
+                // The chain stopped short. It used to be accepted anyway if it had landed within
+                // 25 blocks, which meant the last stretch was wherever the chain happened to end
+                // and the walk-and-teleport search never ran at all. Walk the remainder instead.
+                SearchResult finished = finishOnFoot(player, airChain, goal);
+                if (finished != null) {
+                    return smoothTeleportRoute(player, start, finished.hops());
                 }
+                // Still worth keeping: if nothing below gets closer, chooseBetter returns this.
+                bestFailed = chooseBetter(bestFailed, airChain);
             }
         }
 
@@ -648,9 +653,20 @@ public final class PathBuilder {
         }
 
         boolean hasTeleportExits = !out.isEmpty();
-        double walkTravelCost = includeTeleports
-            ? (hasTeleportExits ? 8.0 : 1.5)
-            : 1.35;
+        // Walking is slower per block than teleporting and is priced above it deliberately. At 8.0
+        // against a hop's ~1.85 for up to twelve blocks the gap was around fifty to one, which is
+        // far more than the real difference in time and meant walking never won even where it
+        // plainly should have. Nearer the goal the balance shifts again: hops need a valid landing
+        // and precision starts to matter more than speed, so the final approach is priced to let
+        // walking compete.
+        double walkTravelCost;
+        if (!includeTeleports) {
+            walkTravelCost = 1.35;
+        } else if (!hasTeleportExits) {
+            walkTravelCost = 1.5;
+        } else {
+            walkTravelCost = from.closerThan(goal, WALK_APPROACH_RADIUS) ? 2.0 : 4.0;
+        }
         for (BlockPos walkOffset : WALK_OFFSETS) {
             BlockPos base = from.offset(walkOffset);
             for (int y = -1; y <= 1; y++) {
@@ -1122,6 +1138,39 @@ public final class PathBuilder {
         }
         Collections.reverse(reversed);
         return reversed;
+    }
+
+    /**
+     * Completes a route that stopped short by walking the rest of the way.
+     *
+     * <p>Teleporting covers ground far faster than walking, so a route is mostly hops. The last
+     * stretch is different: hops need a valid landing and enough clearance, and near a goal tucked
+     * against terrain there often is not one. Walking has no such requirement, and a short walk
+     * costs less time than a hop that overshoots and has to be recovered from.
+     *
+     * @return the combined route, or null if the remainder could not be walked
+     */
+    private SearchResult finishOnFoot(LocalPlayer player, SearchResult partial, BlockPos goal) {
+        List<PathHop> hops = partial.hops();
+        if (hops.isEmpty()) {
+            return null;
+        }
+        BlockPos end = hops.get(hops.size() - 1).landing();
+        if (end.closerThan(goal, CastRules.GOAL_REACHED_RADIUS)) {
+            return new SearchResult(hops, true, 0.0);
+        }
+
+        // Budget scaled to the gap: this is a short approach, not a fresh search across the world.
+        int gap = (int) Math.sqrt(end.distSqr(goal));
+        SearchResult walk = searchPureWalk(player, end, goal, Math.max(8000, Math.min(60000, gap * 400)));
+        if (!walk.reachedGoal() || walk.hops().isEmpty()) {
+            return null;
+        }
+
+        List<PathHop> combined = new ArrayList<>(hops.size() + walk.hops().size());
+        combined.addAll(hops);
+        combined.addAll(walk.hops());
+        return new SearchResult(combined, true, 0.0);
     }
 
     private SearchResult searchPureWalk(LocalPlayer player, BlockPos start, BlockPos goal, int maxExpansions) {
