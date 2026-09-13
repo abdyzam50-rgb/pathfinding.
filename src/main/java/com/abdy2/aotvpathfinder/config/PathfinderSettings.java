@@ -1,4 +1,6 @@
-package com.abdy2.aotvpathfinder;
+package com.abdy2.aotvpathfinder.config;
+
+import com.abdy2.aotvpathfinder.path.PathBuilder;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -7,34 +9,34 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 
-public final class AotvClientSettings {
+public final class PathfinderSettings {
     private static final String FILE_NAME = "aotv-pathfinder.properties";
 
     private final Path path;
-    private TeleportPathfinder.MovementMode movementMode = TeleportPathfinder.MovementMode.HYBRID;
-    private TeleportPathfinder.TeleportMode teleportMode = TeleportPathfinder.TeleportMode.HYBRID_TELEPORT;
+    private PathBuilder.MovementMode movementMode = PathBuilder.MovementMode.HYBRID;
+    private PathBuilder.TeleportMode teleportMode = PathBuilder.TeleportMode.HYBRID_TELEPORT;
     private boolean airChainEnabled = true;
     private int walkPatchWindowBlocks = 6;
     private int teleportPatchLookaheadNodes = 2;
     private int maxPatchAttemptsPerSecond = 3;
     private int commitLockMs = 300;
 
-    private AotvClientSettings(Path path) {
+    private PathfinderSettings(Path path) {
         this.path = path;
     }
 
-    public static AotvClientSettings load(Path runDir) {
+    public static PathfinderSettings load(Path runDir) {
         Path configDir = runDir.resolve("config");
-        AotvClientSettings settings = new AotvClientSettings(configDir.resolve(FILE_NAME));
+        PathfinderSettings settings = new PathfinderSettings(configDir.resolve(FILE_NAME));
         settings.read();
         return settings;
     }
 
-    public TeleportPathfinder.MovementMode movementMode() {
+    public PathBuilder.MovementMode movementMode() {
         return movementMode;
     }
 
-    public TeleportPathfinder.TeleportMode teleportMode() {
+    public PathBuilder.TeleportMode teleportMode() {
         return teleportMode;
     }
 
@@ -54,12 +56,12 @@ public final class AotvClientSettings {
         return commitLockMs;
     }
 
-    public void setMovementMode(TeleportPathfinder.MovementMode mode) {
+    public void setMovementMode(PathBuilder.MovementMode mode) {
         this.movementMode = mode;
         write();
     }
 
-    public void setTeleportMode(TeleportPathfinder.TeleportMode mode) {
+    public void setTeleportMode(PathBuilder.TeleportMode mode) {
         this.teleportMode = mode;
         write();
     }
@@ -125,24 +127,24 @@ public final class AotvClientSettings {
         }
     }
 
-    private static TeleportPathfinder.MovementMode parseMode(String raw) {
+    private static PathBuilder.MovementMode parseMode(String raw) {
         if (raw == null) {
-            return TeleportPathfinder.MovementMode.HYBRID;
+            return PathBuilder.MovementMode.HYBRID;
         }
         try {
-            return TeleportPathfinder.MovementMode.valueOf(raw.trim().toUpperCase());
+            return PathBuilder.MovementMode.valueOf(raw.trim().toUpperCase());
         } catch (IllegalArgumentException ignored) {
-            return TeleportPathfinder.MovementMode.HYBRID;
+            return PathBuilder.MovementMode.HYBRID;
         }
     }
-    private static TeleportPathfinder.TeleportMode parseTeleportMode(String raw) {
+    private static PathBuilder.TeleportMode parseTeleportMode(String raw) {
         if (raw == null) {
-            return TeleportPathfinder.TeleportMode.HYBRID_TELEPORT;
+            return PathBuilder.TeleportMode.HYBRID_TELEPORT;
         }
         try {
-            return TeleportPathfinder.TeleportMode.valueOf(raw.trim().toUpperCase());
+            return PathBuilder.TeleportMode.valueOf(raw.trim().toUpperCase());
         } catch (IllegalArgumentException ignored) {
-            return TeleportPathfinder.TeleportMode.HYBRID_TELEPORT;
+            return PathBuilder.TeleportMode.HYBRID_TELEPORT;
         }
     }
 
