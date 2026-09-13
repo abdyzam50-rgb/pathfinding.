@@ -102,8 +102,14 @@ public final class PathBuilder {
         // Walk-only has to exclude this too. The air chain is a teleport strategy, and gating it
         // on the teleport mode alone let it run in walk-only and return a route made entirely of
         // hops -- so asking for walking produced no walking at all.
+        // Walk-only is answered entirely by the engine below; none of the teleport strategies
+        // apply, and running them first only risks one of them answering instead.
+        if (resolvedMode == MovementMode.WALK_ONLY) {
+            SearchResult walk = searchPureWalk(player, start, goal, 0);
+            return smoothTeleportRoute(player, start, walk.hops(), resolvedMode);
+        }
+
         if (allowAirChain
-                && resolvedMode != MovementMode.WALK_ONLY
                 && resolvedTeleportMode != TeleportMode.SHIFT_ONLY) {
             SearchResult airChain = searchDirectAirChain(player, start, goal, availableMana, resolvedTeleportMode);
             if (airChain.reachedGoal()) {
@@ -139,31 +145,18 @@ public final class PathBuilder {
         }
 
         if (resolvedMode != MovementMode.TELEPORT_ONLY) {
-            int[] walkBudgets = new int[] {
-                Math.max(15000, Math.min(70000, distance * 90)),
-                Math.max(26000, Math.min(120000, distance * 150))
-            };
-            for (int budget : walkBudgets) {
-                if (outOfTime()) break;
-                SearchResult walkGraph = searchOnCustomNodeGraph(player, start, goal, -1, false, false, resolvedTeleportMode, budget);
-                if (walkGraph.reachedGoal()) {
-                    return smoothTeleportRoute(player, start, walkGraph.hops(), resolvedMode);
-                }
-                bestFailed = chooseBetter(bestFailed, walkGraph);
+            // Walking comes from the kinematic engine, and only from it.
+            //
+            // There used to be a grid pass here first -- the same node graph as the mixed search,
+            // just with teleports switched off. Being pure walking too, it answered before the
+            // engine was ever reached, so routes were built from grid nodes that carry no
+            // instruction while the engine sat unused at the bottom of the list. Whatever the
+            // engine is worth, it is worth nothing from there.
+            SearchResult parkour = searchPureWalk(player, start, goal, 0);
+            if (parkour.reachedGoal()) {
+                return smoothTeleportRoute(player, start, parkour.hops(), resolvedMode);
             }
-
-            int[] pureWalkBudgets = new int[] {
-                Math.max(30000, Math.min(120000, distance * 140)),
-                Math.max(50000, Math.min(180000, distance * 200))
-            };
-            for (int budget : pureWalkBudgets) {
-                if (outOfTime()) break;
-                SearchResult pureWalk = searchPureWalk(player, start, goal, budget);
-                if (pureWalk.reachedGoal()) {
-                    return smoothTeleportRoute(player, start, pureWalk.hops(), resolvedMode);
-                }
-                bestFailed = chooseBetter(bestFailed, pureWalk);
-            }
+            bestFailed = chooseBetter(bestFailed, parkour);
         }
 
         return smoothTeleportRoute(player, start, bestFailed.hops(), resolvedMode);
