@@ -25,10 +25,16 @@ import net.minecraft.core.BlockPos;
 public final class ParkourWalkPlanner {
     private ParkourWalkPlanner() {}
 
-    /** The result of planning a walk, and whether it actually got there. */
-    public record Result(List<PathHop> hops, boolean reachedGoal) {
+    /**
+     * A planned walk.
+     *
+     * <p>Carries the engine's own nodes alongside the translated steps. The translation is what the
+     * route and the renderer use; the nodes are what {@code PathFollower} is handed to perform,
+     * since it reads state the translation does not carry.
+     */
+    public record Result(List<PathHop> hops, List<PathNode> nodes, boolean reachedGoal) {
         static Result none() {
-            return new Result(List.of(), false);
+            return new Result(List.of(), List.of(), false);
         }
     }
 
@@ -64,7 +70,7 @@ public final class ParkourWalkPlanner {
         }
 
         BlockPos end = hops.get(hops.size() - 1).landing();
-        return new Result(hops, end.closerThan(goal, 1.8));
+        return new Result(hops, nodes, end.closerThan(goal, 1.8));
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.abdy2.aotvpathfinder.path;
 
 import com.abdy2.aotvpathfinder.ability.CastRules;
+import com.abdy2.aotvpathfinder.parkour.PathNode;
 import com.abdy2.aotvpathfinder.path.HopType;
 import com.abdy2.aotvpathfinder.path.PathHop;
 
@@ -1266,8 +1267,17 @@ public final class PathBuilder {
      * produced positions and left the executor to work out how to travel between them; this
      * produces positions that say how, which is the difference the whole mod was missing.
      */
+    /** The engine's own nodes for the walk most recently planned, for the follower to perform. */
+    private List<PathNode> lastWalkNodes = List.of();
+
+    /** The engine nodes behind the walking in the route just returned, empty if none. */
+    public List<PathNode> lastWalkNodes() {
+        return lastWalkNodes;
+    }
+
     private SearchResult searchPureWalk(LocalPlayer player, BlockPos start, BlockPos goal, int maxExpansions) {
         ParkourWalkPlanner.Result walk = ParkourWalkPlanner.plan(player, start, goal, true);
+        lastWalkNodes = walk.nodes();
         if (walk.hops().isEmpty()) {
             return SearchResult.empty();
         }

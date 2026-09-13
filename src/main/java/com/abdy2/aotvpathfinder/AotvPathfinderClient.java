@@ -12,6 +12,8 @@ import com.abdy2.aotvpathfinder.render.PathRenderer;
 import com.abdy2.aotvpathfinder.config.PathfinderSettings;
 import com.abdy2.aotvpathfinder.diag.FaultLog;
 import com.abdy2.aotvpathfinder.diag.ManaTracker;
+import com.abdy2.aotvpathfinder.parkour.PathFollower;
+import com.abdy2.aotvpathfinder.parkour.PathNode;
 import com.abdy2.aotvpathfinder.path.PathBuilder;
 
 import com.abdy2.aotvpathfinder.ability.CastRules;
@@ -522,8 +524,27 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         }
 
         if (step.isWalk()) {
-            if (movement.walkToStep(client, player, step)) {
-                currentStepIndex++;
+            // Walking is performed by the engine's own follower, not by us.
+            //
+            // It knows how each node it produced is meant to be executed -- when to sprint, when a
+            // drop is walked off rather than jumped, when a block has to be placed mid-arc -- and
+            // it tracks that across ticks. Driving the keys from here meant inferring all of it
+            // from block heights one tick at a time, which is where the walking bugs came from.
+            if (!PathFollower.isFollowing()) {
+                List<PathNode> nodes = pathfinder.lastWalkNodes();
+                if (nodes.isEmpty() || !PathFollower.startFollowing(nodes)) {
+                    // No engine nodes behind this step: it came from the mixed search, whose walk
+                    // edges are still grid-derived. Fall back to driving it ourselves.
+                    if (movement.walkToStep(client, player, step)) {
+                        currentStepIndex++;
+                    }
+                    return;
+                }
+            }
+            PathFollower.tick(player);
+            if (!PathFollower.isFollowing()) {
+                // The follower finished the walk; the rest of the route resumes from here.
+                currentStepIndex = activePath.size();
             }
             return;
         }
