@@ -64,8 +64,13 @@ public final class MovementController {
             double nextFloor = floorTopY(player, step.landing().below());
             double floorDelta = nextFloor - hereFloor;
             boolean uphillStep = floorDelta > 0.78;
-            var aheadDir = player.getDirection();
-            BlockPos ahead = player.blockPosition().relative(aheadDir);
+            // The block we are about to walk into, taken from the direction of travel rather
+            // than the player's facing. Those differ while the view is still turning toward the
+            // node, and facing was picking the wrong block to test exactly when it mattered.
+            Vec3 toTarget = target.subtract(here);
+            BlockPos ahead = Math.abs(toTarget.x) > Math.abs(toTarget.z)
+                ? player.blockPosition().relative(toTarget.x > 0 ? Direction.EAST : Direction.WEST)
+                : player.blockPosition().relative(toTarget.z > 0 ? Direction.SOUTH : Direction.NORTH);
             BlockState aheadState = player.level().getBlockState(ahead);
             boolean stepLikeAhead = aheadState.getBlock() instanceof SlabBlock || aheadState.getBlock() instanceof StairBlock;
             boolean oneBlockObstacleAhead = !stepLikeAhead
@@ -81,7 +86,13 @@ public final class MovementController {
                 return false;
             }
 
-            boolean shouldJump = (uphillStep || oneBlockObstacleAhead) && dist < 2.35 && floorDelta >= 0.78;
+            // Jump for a step up to the next node, or for something in the way on the route to
+            // it. The second case used to be unreachable: the condition also required
+            // floorDelta >= 0.78, and uphillStep is defined as floorDelta > 0.78, so the trailing
+            // test cancelled the obstacle branch out entirely. Only a node a block higher could
+            // ever produce a jump -- never an obstacle between here and a node at the same level,
+            // which is the ordinary case.
+            boolean shouldJump = dist < 2.35 && (uphillStep || oneBlockObstacleAhead);
             client.options.keyJump.setDown(shouldJump);
             if (shouldJump && player.onGround()) {
                 player.jumpFromGround();
