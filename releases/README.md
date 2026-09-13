@@ -1,6 +1,6 @@
 # Installing
 
-## aotvloader-1.1.0.jar  (install this one)
+## aotvloader-1.2.0.jar  (install this one)
 
 Put it in `mods/` and leave it there. It keeps `mods/aotvpathfinder.jar`
 current on its own, so the jar never has to be replaced by hand again.
@@ -9,13 +9,18 @@ current on its own, so the jar never has to be replaced by hand again.
 
 Updates take effect on the launch after they are found:
 
-    launch 1   finds a new build, downloads it
-    launch 2   installs it at startup, and runs it
+    launch 1   downloads the new build and installs it
+    launch 2   runs it
 
-That delay is unavoidable rather than a shortcut. Fabric holds every jar in
-`mods/` open for the whole session, and an open jar cannot be replaced on
-Windows, so the file fetched during one run is swapped in at the start of the
-next — before anything has opened it.
+The delay is unavoidable. Fabric's startup goes: discover mods, load them, then
+run preLaunch code. The loader runs at preLaunch, which is the earliest a mod
+can act and the last moment the jar is still replaceable — but discovery has
+already happened by then, so a jar written now is picked up on the following
+launch.
+
+Both halves have to happen in that one preLaunch, though. Downloading later in
+the launch and installing at the next one costs an extra launch for nothing,
+because the jar then lands after discovery has already been and gone.
 
 Keeping the jar in `mods/` is what makes it a real mod to Fabric: it shows up in
 the mod list, crash reports attribute it properly, and it would still work if
