@@ -3,6 +3,7 @@ package com.abdy2.aotvpathfinder.path;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.abdy2.aotvpathfinder.parkour.PathCompressor;
 import com.abdy2.aotvpathfinder.parkour.PathNode;
 import com.abdy2.aotvpathfinder.parkour.PathfinderEngine;
 
@@ -49,9 +50,20 @@ public final class ParkourWalkPlanner {
         }
         List<PathNode> nodes;
         try {
+            // Multi-angle explicitly. The no-flag overloads default it off, which locks turns to
+            // ninety degrees and produces a node at every grid step -- the engine's ability to run
+            // straight at any angle to the next node, and the shorter routes that come with it,
+            // simply does not happen.
             nodes = allowParkour
-                ? PathfinderEngine.findSprintNodePath(player.level(), start, goal)
-                : PathfinderEngine.findNodePath(player.level(), start, goal);
+                ? PathfinderEngine.findSprintNodePath(player.level(), start, goal, false)
+                : PathfinderEngine.findNodePath(player.level(), start, goal, true);
+
+            // Collapse runs the player can cross in one move. This is the step that turns a node
+            // per block into a node per decision; it preserves jumps, drops and edges, which have
+            // to stay as their own nodes to be performed.
+            if (nodes != null && nodes.size() > 2) {
+                nodes = PathCompressor.compressPath(player.level(), nodes, start, goal);
+            }
         } catch (Exception e) {
             // The engine is large and world-dependent; a failure to plan must not take a run with
             // it. An empty result reads the same as finding nothing, which callers already handle.

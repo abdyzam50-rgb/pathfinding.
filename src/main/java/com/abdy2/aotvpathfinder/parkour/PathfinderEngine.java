@@ -85,7 +85,9 @@ public class PathfinderEngine {
 
     public static List<PathNode> findNodePath(Level world, BlockPos start, BlockPos end,
                                               boolean useMultiAngle, boolean hasWaterBucket) {
-        return runAStar(world, start, null, end, false, hasWaterBucket);
+        // Was passing false here, discarding the caller's choice: asking for multi-angle through
+        // this overload silently got the ninety-degree search instead.
+        return runAStar(world, start, null, end, useMultiAngle, hasWaterBucket);
     }
 
     /** Overload with sub-block start precision — places the start node at the player's
@@ -108,7 +110,10 @@ public class PathfinderEngine {
 
     public static List<PathNode> findSprintNodePath(Level world, BlockPos start, BlockPos end,
                                                     boolean hasWaterBucket) {
-        List<PathNode> path = runAStar(world, start, null, end, false, hasWaterBucket);
+        // Multi-angle, matching the precise-start overload below. This one passed false, so which
+        // entry point a caller happened to use decided whether turns were free or locked to ninety
+        // degrees -- for the same search.
+        List<PathNode> path = runAStar(world, start, null, end, true, hasWaterBucket);
         return sprintifyPath(path);
     }
 
