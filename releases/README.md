@@ -1,6 +1,6 @@
 # Installing
 
-## aotvloader-1.2.0.jar  (install this one)
+## aotvloader-1.3.0.jar  (install this one)
 
 Put it in `mods/` and leave it there. It keeps `mods/aotvpathfinder.jar`
 current on its own, so the jar never has to be replaced by hand again.
@@ -9,8 +9,14 @@ current on its own, so the jar never has to be replaced by hand again.
 
 Updates take effect on the launch after they are found:
 
-    launch 1   downloads the new build and installs it
+    launch 1   downloads the new build, installs it, then closes
     launch 2   runs it
+
+The close is deliberate. Fabric has already chosen which mods it is loading by
+the time the loader runs, so continuing would play the previous build for a
+whole session while the new one sat unused on disk -- looking like it had
+updated when it had not. Nothing is lost by stopping: no window has opened and
+no world has loaded. The launcher reports it as an ordinary close, not a crash.
 
 The delay is unavoidable. Fabric's startup goes: discover mods, load them, then
 run preLaunch code. The loader runs at preLaunch, which is the earliest a mod
