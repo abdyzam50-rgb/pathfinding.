@@ -1,5 +1,6 @@
 package com.abdy2.aotvpathfinder.execute;
 
+import com.abdy2.aotvpathfinder.path.MoveKind;
 import com.abdy2.aotvpathfinder.path.PathHop;
 
 import net.minecraft.client.Minecraft;
@@ -78,7 +79,12 @@ public final class MovementController {
                 && player.level().getBlockState(ahead.above()).isAir();
 
             int cliffDropAhead = dropDistanceToFloor(player, ahead, 24);
-            boolean cliffAhead = cliffDropAhead > 3;
+            // A planned drop is meant to be walked off, so the drop ahead is the route working.
+            // Only an unplanned one is a cliff to stop at.
+            boolean cliffAhead = cliffDropAhead > 3
+                && step.kind() != MoveKind.DROP
+                && step.kind() != MoveKind.WATER_DROP
+                && step.kind() != MoveKind.BOUNCE;
             if (cliffAhead) {
                 client.options.keyUp.setDown(false);
                 client.options.keyShift.setDown(true);
@@ -86,17 +92,20 @@ public final class MovementController {
                 return false;
             }
 
-            // The planner decided this when it built the node: a two-block step had its jump
-            // arc validated, and the walk search labels every node it produces. Re-deriving it
-            // here from block heights was guessing at a question already answered, and guessing
-            // badly -- the geometry test could not tell an obstacle in the way from a node at the
-            // same height, so it never jumped over anything.
+            // Perform what the node asks for.
             //
-            // The height check stays as a fallback for steps that carry no style, which is every
-            // walk node the graph search emits outside the jump offsets.
+            // The planner settled this while validating the trajectory: it knows a sprint jump
+            // needs sprint held, a drop needs no jump at all, and a bounce needs neither. Working
+            // it out again here from block heights is what produced a run of wrong answers, the
+            // worst being that an obstacle in the way and a node one block up are indistinguishable
+            // by floor height.
+            //
+            // The height heuristic survives only for a plain WALK node, since a route can still
+            // contain steps that carry no stronger instruction.
+            MoveKind kind = step.kind();
             boolean shouldJump = dist < 2.35
-                && (step.requiresJump() || uphillStep || oneBlockObstacleAhead);
-            client.options.keySprint.setDown(step.style().needsSprint());
+                && (kind.needsJump() || (kind == MoveKind.WALK && (uphillStep || oneBlockObstacleAhead)));
+            client.options.keySprint.setDown(kind.needsSprint());
             client.options.keyJump.setDown(shouldJump);
             if (shouldJump && player.onGround()) {
                 player.jumpFromGround();

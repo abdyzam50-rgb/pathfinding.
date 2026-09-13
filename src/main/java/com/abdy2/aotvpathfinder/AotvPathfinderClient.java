@@ -1149,16 +1149,20 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         int warp = 0;
         int step = 0;
         int jump = 0;
-        int sprint = 0;
+        int place = 0;
         for (PathHop hop : route) {
             switch (hop.type()) {
                 case NORMAL -> tp++;
                 case SHIFT -> warp++;
                 case WALK -> {
-                    switch (hop.style()) {
-                        case JUMP -> jump++;
-                        case SPRINT_JUMP -> sprint++;
-                        case STEP -> step++;
+                    // Grouped by what they cost the player to perform, not one bucket each:
+                    // a dozen counters would be less readable than the three that matter.
+                    if (hop.kind().needsItem()) {
+                        place++;
+                    } else if (hop.kind().needsJump()) {
+                        jump++;
+                    } else {
+                        step++;
                     }
                 }
             }
@@ -1169,7 +1173,7 @@ public class AotvPathfinderClient implements ClientModInitializer, PathRenderer.
         if (warp > 0) sb.append(" ").append(warp).append("warp");
         if (step > 0) sb.append(" ").append(step).append("step");
         if (jump > 0) sb.append(" ").append(jump).append("jump");
-        if (sprint > 0) sb.append(" ").append(sprint).append("sprint");
+        if (place > 0) sb.append(" ").append(place).append("place");
         return sb.toString();
     }
 

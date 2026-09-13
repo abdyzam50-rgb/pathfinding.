@@ -178,9 +178,12 @@ private static int dimColor(int color, double factor) {
      * <pre>
      *   gold     transmission hop
      *   magenta  etherwarp hop
-     *   white    ordinary step
-     *   cyan     jump
-     *   orange   sprint jump
+     *   white    ordinary step        pink    boost place
+     *   cyan     jump                 blue    water drop
+     *   orange   sprint jump          lime    slime bounce
+     *   grey     drop                 tan     climb
+     *   purple   interact             teal    bridge
+     *   amber    pillar               olive   edge
      * </pre>
      */
     private int colorForHop(PathHop hop) {
@@ -188,10 +191,19 @@ private static int dimColor(int color, double factor) {
             return 0xFF55FF;
         }
         if (hop.type() == HopType.WALK) {
-            return switch (hop.style()) {
+            return switch (hop.kind()) {
+                case WALK -> 0xFFFFFF;
                 case JUMP -> 0x33E0FF;
                 case SPRINT_JUMP -> 0xFF9522;
-                case STEP -> 0xFFFFFF;
+                case BOOST_PLACE -> 0xFF6FD0;
+                case DROP -> 0x8FA8C8;
+                case WATER_DROP -> 0x3A7BFF;
+                case BOUNCE -> 0x7CFF4D;
+                case CLIMB -> 0xC9925A;
+                case EDGE -> 0xC8C86A;
+                case INTERACT -> 0xB56BFF;
+                case PILLAR -> 0xFFC15E;
+                case BRIDGE -> 0x35D6B0;
             };
         }
         return 0xFFD700;

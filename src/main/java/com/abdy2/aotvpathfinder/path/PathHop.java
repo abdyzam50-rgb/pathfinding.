@@ -28,16 +28,22 @@ import net.minecraft.core.BlockPos;
  * @param type     which ability performs the hop
  * @param manaCost mana the hop is expected to consume
  */
-public record PathHop(BlockPos landing, BlockPos target, HopType type, int manaCost, WalkStyle style) {
+public record PathHop(BlockPos landing, BlockPos target, HopType type, int manaCost,
+                      MoveKind kind, BlockPos interactPos) {
 
     /** A hop whose target follows from its landing by the usual rule for its type. */
     public static PathHop of(BlockPos landing, HopType type, int manaCost) {
-        return of(landing, type, manaCost, WalkStyle.STEP);
+        return of(landing, type, manaCost, MoveKind.WALK);
     }
 
     /** A step the planner has decided needs a particular kind of movement. */
-    public static PathHop of(BlockPos landing, HopType type, int manaCost, WalkStyle style) {
-        return new PathHop(landing, defaultTarget(landing, type), type, manaCost, style);
+    public static PathHop of(BlockPos landing, HopType type, int manaCost, MoveKind kind) {
+        return new PathHop(landing, defaultTarget(landing, type), type, manaCost, kind, null);
+    }
+
+    /** A step that has to place or use a block to be performed. */
+    public static PathHop acting(BlockPos landing, MoveKind kind, BlockPos interactPos) {
+        return new PathHop(landing, landing, HopType.WALK, 0, kind, interactPos);
     }
 
     /**
@@ -47,12 +53,12 @@ public record PathHop(BlockPos landing, BlockPos target, HopType type, int manaC
      * preserved rather than being re-derived from the settled landing.
      */
     public static PathHop settled(BlockPos landing, BlockPos aimedAt, HopType type, int manaCost) {
-        return settled(landing, aimedAt, type, manaCost, WalkStyle.STEP);
+        return settled(landing, aimedAt, type, manaCost, MoveKind.WALK);
     }
 
     public static PathHop settled(BlockPos landing, BlockPos aimedAt, HopType type, int manaCost,
-                                  WalkStyle style) {
-        return new PathHop(landing, aimedAt, type, manaCost, style);
+                                  MoveKind kind) {
+        return new PathHop(landing, aimedAt, type, manaCost, kind, null);
     }
 
     /** Where a hop of this type is aimed when nothing displaced the landing. */
@@ -67,7 +73,12 @@ public record PathHop(BlockPos landing, BlockPos target, HopType type, int manaC
 
     /** True when this step cannot be made by walking into it. */
     public boolean requiresJump() {
-        return type == HopType.WALK && style.needsJump();
+        return type == HopType.WALK && kind.needsJump();
+    }
+
+    /** True when performing this step needs an item in hand, not just movement keys. */
+    public boolean requiresItem() {
+        return type == HopType.WALK && kind.needsItem();
     }
 
     public boolean isWalk() {

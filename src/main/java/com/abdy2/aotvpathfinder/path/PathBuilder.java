@@ -78,7 +78,6 @@ public final class PathBuilder {
         return System.nanoTime() > deadlineNanos;
     }
 
-    private final WalkPathBuilder walkPathfinder = new WalkPathBuilder();
 
     public List<PathHop> findPath(
         LocalPlayer player,
@@ -434,7 +433,7 @@ public final class PathBuilder {
         Long2ObjectOpenHashMap<SearchNode> visited = new Long2ObjectOpenHashMap<>(graphNodeBudget);
         LongOpenHashSet closed = new LongOpenHashSet(graphNodeBudget);
 
-        SearchNode first = new SearchNode(startNode, null, 0.0, heuristicWithStart(start, goal, start), 0, HopType.WALK, 0, startNode.pos, WalkStyle.STEP);
+        SearchNode first = new SearchNode(startNode, null, 0.0, heuristicWithStart(start, goal, start), 0, HopType.WALK, 0, startNode.pos, MoveKind.WALK);
         open.insertOrUpdate(startPacked, first.fScore);
         visited.put(startPacked, first);
 
@@ -499,7 +498,7 @@ public final class PathBuilder {
                     edge.type,
                     edge.manaCost,
                     edge.target(),
-                    edge.style()
+                    edge.kind()
                 );
 
                 visited.put(edgePacked, next);
@@ -552,7 +551,7 @@ public final class PathBuilder {
                 }
 
                 current.edges.add(new GraphEdge(to, neighbor.target(), neighbor.type, neighbor.manaCost,
-                    neighbor.travelCost, neighbor.style()));
+                    neighbor.travelCost, neighbor.kind()));
 
                 if (isNew && shouldExpandNode(start, goal, to.pos, includeTeleports)) {
                     queue.add(to);
@@ -569,7 +568,7 @@ public final class PathBuilder {
                     BlockPos neighborPos = goal.offset(walkOffset).offset(0, dy, 0);
                     GraphNode neighborNode = graph.get(packPos(neighborPos));
                     if (neighborNode != null && isWalkTransitionValid(player, neighborPos, goal)) {
-                        neighborNode.edges.add(new GraphEdge(goalNode, goalNode.pos, HopType.WALK, 0, 1.35, WalkStyle.STEP));
+                        neighborNode.edges.add(new GraphEdge(goalNode, goalNode.pos, HopType.WALK, 0, 1.35, MoveKind.WALK));
                     }
                 }
             }
@@ -747,7 +746,7 @@ public final class PathBuilder {
             if (teleportMode == TeleportMode.JUST_TELEPORT && !dest.closerThan(goal, JUST_TELEPORT_FINAL_WALK_RADIUS)) continue;
             // Came from JUMP_OFFSETS and had its arc validated: this is a jump, and saying so
             // here saves the executor guessing at it later.
-            out.add(new Neighbor(dest, HopType.WALK, 0, walkTravelCost * 2.0 + 0.2, WalkStyle.JUMP));
+            out.add(new Neighbor(dest, HopType.WALK, 0, walkTravelCost * 2.0 + 0.2, MoveKind.JUMP));
         }
 
         if (includeTeleports && teleportMode != TeleportMode.SHIFT_ONLY) {
@@ -1226,7 +1225,7 @@ public final class PathBuilder {
         List<PathHop> reversed = new ArrayList<>();
         SearchNode cursor = node;
         while (cursor != null && cursor.parent != null) {
-            reversed.add(PathHop.settled(cursor.node.pos, cursor.target, cursor.type, cursor.manaCost, cursor.style));
+            reversed.add(PathHop.settled(cursor.node.pos, cursor.target, cursor.type, cursor.manaCost, cursor.kind));
             cursor = cursor.parent;
         }
         Collections.reverse(reversed);
@@ -1266,31 +1265,21 @@ public final class PathBuilder {
         return new SearchResult(combined, true, 0.0);
     }
 
-    /** Carries the walk search's own classification of a step through to the finished route. */
-    private static WalkStyle styleOf(WalkNode.Type type) {
-        return switch (type) {
-            case JUMP -> WalkStyle.JUMP;
-            case SPRINT_JUMP -> WalkStyle.SPRINT_JUMP;
-            // Dropping, climbing and edging all need walking into, not jumping.
-            case WALK, DROP, CLIMB, EDGE -> WalkStyle.STEP;
-        };
-    }
 
+    /**
+     * Plans a walk with the kinematic parkour engine.
+     *
+     * <p>This is where the walking half of a route now comes from. The grid search it replaces
+     * produced positions and left the executor to work out how to travel between them; this
+     * produces positions that say how, which is the difference the whole mod was missing.
+     */
     private SearchResult searchPureWalk(LocalPlayer player, BlockPos start, BlockPos goal, int maxExpansions) {
-        WalkPathBuilder.Result walk = walkPathfinder.findPath(
-            player,
-            start,
-            goal,
-            maxExpansions,
-            CastRules.GOAL_REACHED_RADIUS
-        );
-
-        List<PathHop> hops = new ArrayList<>(walk.path().size());
-        for (WalkNode node : walk.path()) {
-            hops.add(PathHop.of(node.pos, HopType.WALK, 0, styleOf(node.type)));
+        ParkourWalkPlanner.Result walk = ParkourWalkPlanner.plan(player, start, goal, true);
+        if (walk.hops().isEmpty()) {
+            return SearchResult.empty();
         }
-
-        return new SearchResult(hops, walk.reachedGoal(), walk.bestDistanceSq());
+        BlockPos end = walk.hops().get(walk.hops().size() - 1).landing();
+        return new SearchResult(walk.hops(), walk.reachedGoal(), end.distSqr(goal));
     }
 
     private SearchResult chooseBetter(SearchResult a, SearchResult b) {
@@ -1385,17 +1374,17 @@ public final class PathBuilder {
      * it and aimed somewhere the planner never checked.
      */
     private record Neighbor(BlockPos pos, BlockPos target, HopType type, int manaCost,
-                            double travelCost, WalkStyle style) {
+                            double travelCost, MoveKind kind) {
         Neighbor(BlockPos pos, HopType type, int manaCost, double travelCost) {
-            this(pos, PathHop.defaultTarget(pos, type), type, manaCost, travelCost, WalkStyle.STEP);
+            this(pos, PathHop.defaultTarget(pos, type), type, manaCost, travelCost, MoveKind.WALK);
         }
 
-        Neighbor(BlockPos pos, HopType type, int manaCost, double travelCost, WalkStyle style) {
-            this(pos, PathHop.defaultTarget(pos, type), type, manaCost, travelCost, style);
+        Neighbor(BlockPos pos, HopType type, int manaCost, double travelCost, MoveKind kind) {
+            this(pos, PathHop.defaultTarget(pos, type), type, manaCost, travelCost, kind);
         }
     }
     private record GraphEdge(GraphNode to, BlockPos target, HopType type, int manaCost,
-                             double travelCost, WalkStyle style) {}
+                             double travelCost, MoveKind kind) {}
     private record SearchResult(List<PathHop> hops, boolean reachedGoal, double bestDistanceSq) {
         private static SearchResult empty() {
             return new SearchResult(Collections.emptyList(), false, Double.POSITIVE_INFINITY);
@@ -1422,7 +1411,7 @@ public final class PathBuilder {
         /** Block aimed at to make this step, which is not always where it landed. */
         private final BlockPos target;
         /** How the step has to be performed. */
-        private final WalkStyle style;
+        private final MoveKind kind;
 
         private SearchNode(
             GraphNode node,
@@ -1433,7 +1422,7 @@ public final class PathBuilder {
             HopType type,
             int manaCost,
             BlockPos target,
-            WalkStyle style
+            MoveKind kind
         ) {
             this.node = node;
             this.parent = parent;
@@ -1442,7 +1431,7 @@ public final class PathBuilder {
             this.manaSpent = manaSpent;
             this.type = type;
             this.target = target;
-            this.style = style;
+            this.kind = kind;
             this.manaCost = manaCost;
         }
     }
