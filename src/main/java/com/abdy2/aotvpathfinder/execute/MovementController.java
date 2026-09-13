@@ -86,13 +86,17 @@ public final class MovementController {
                 return false;
             }
 
-            // Jump for a step up to the next node, or for something in the way on the route to
-            // it. The second case used to be unreachable: the condition also required
-            // floorDelta >= 0.78, and uphillStep is defined as floorDelta > 0.78, so the trailing
-            // test cancelled the obstacle branch out entirely. Only a node a block higher could
-            // ever produce a jump -- never an obstacle between here and a node at the same level,
-            // which is the ordinary case.
-            boolean shouldJump = dist < 2.35 && (uphillStep || oneBlockObstacleAhead);
+            // The planner decided this when it built the node: a two-block step had its jump
+            // arc validated, and the walk search labels every node it produces. Re-deriving it
+            // here from block heights was guessing at a question already answered, and guessing
+            // badly -- the geometry test could not tell an obstacle in the way from a node at the
+            // same height, so it never jumped over anything.
+            //
+            // The height check stays as a fallback for steps that carry no style, which is every
+            // walk node the graph search emits outside the jump offsets.
+            boolean shouldJump = dist < 2.35
+                && (step.requiresJump() || uphillStep || oneBlockObstacleAhead);
+            client.options.keySprint.setDown(step.style().needsSprint());
             client.options.keyJump.setDown(shouldJump);
             if (shouldJump && player.onGround()) {
                 player.jumpFromGround();

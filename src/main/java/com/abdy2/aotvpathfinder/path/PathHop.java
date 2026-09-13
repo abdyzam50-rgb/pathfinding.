@@ -28,11 +28,16 @@ import net.minecraft.core.BlockPos;
  * @param type     which ability performs the hop
  * @param manaCost mana the hop is expected to consume
  */
-public record PathHop(BlockPos landing, BlockPos target, HopType type, int manaCost) {
+public record PathHop(BlockPos landing, BlockPos target, HopType type, int manaCost, WalkStyle style) {
 
     /** A hop whose target follows from its landing by the usual rule for its type. */
     public static PathHop of(BlockPos landing, HopType type, int manaCost) {
-        return new PathHop(landing, defaultTarget(landing, type), type, manaCost);
+        return of(landing, type, manaCost, WalkStyle.STEP);
+    }
+
+    /** A step the planner has decided needs a particular kind of movement. */
+    public static PathHop of(BlockPos landing, HopType type, int manaCost, WalkStyle style) {
+        return new PathHop(landing, defaultTarget(landing, type), type, manaCost, style);
     }
 
     /**
@@ -42,7 +47,12 @@ public record PathHop(BlockPos landing, BlockPos target, HopType type, int manaC
      * preserved rather than being re-derived from the settled landing.
      */
     public static PathHop settled(BlockPos landing, BlockPos aimedAt, HopType type, int manaCost) {
-        return new PathHop(landing, aimedAt, type, manaCost);
+        return settled(landing, aimedAt, type, manaCost, WalkStyle.STEP);
+    }
+
+    public static PathHop settled(BlockPos landing, BlockPos aimedAt, HopType type, int manaCost,
+                                  WalkStyle style) {
+        return new PathHop(landing, aimedAt, type, manaCost, style);
     }
 
     /** Where a hop of this type is aimed when nothing displaced the landing. */
@@ -53,6 +63,11 @@ public record PathHop(BlockPos landing, BlockPos target, HopType type, int manaC
 
     public boolean requiresShift() {
         return type == HopType.SHIFT;
+    }
+
+    /** True when this step cannot be made by walking into it. */
+    public boolean requiresJump() {
+        return type == HopType.WALK && style.needsJump();
     }
 
     public boolean isWalk() {
